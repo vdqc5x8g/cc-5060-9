@@ -1,0 +1,122 @@
+{
+  "ambiguous": {
+    "best_loss": 15816.765054523876,
+    "component_sum_error": 1.983781283023044e-16,
+    "gain_ambiguity": [],
+    "heldout_loss": 2462.5252776483703,
+    "mask_sum_error": 7.535673841049366e-17,
+    "mean_sdr_db": 36.22637435743996,
+    "oracle_grouped_sdr": [
+      0.0,
+      0.8185225189190679,
+      71.63422619596085
+    ],
+    "retained": [
+      false,
+      true,
+      true,
+      true,
+      true
+    ],
+    "selected_candidate_kind": "unanchored",
+    "selected_kind_retained": 4,
+    "selected_kind_stable": true,
+    "solution_stable": true
+  },
+  "ambiguous_twins_anchored": {
+    "best_loss": 15851.112176516002,
+    "component_sum_error": 1.8162882189587133e-16,
+    "gain_ambiguity": [
+      {
+        "gains_db": [
+          67.28599342680752,
+          68.44288349928182
+        ],
+        "loss_relative_change": 0.002511309576627434,
+        "template_cosine": 0.9993235954452141,
+        "templates": [
+          0,
+          1
+        ],
+        "unidentifiable_gain_split": true
+      }
+    ],
+    "heldout_loss": 2480.7633417632746,
+    "mask_sum_error": 9.472265012093418e-17,
+    "mean_sdr_db": 22.097493392490094,
+    "oracle_grouped_sdr": [
+      0.2725111299489488,
+      0.3596122717444938,
+      65.66035677577683
+    ],
+    "retained": [
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ],
+    "selected_candidate_kind": "anchored",
+    "selected_kind_retained": 5,
+    "selected_kind_stable": true,
+    "solution_stable": true
+  },
+  "separable": {
+    "best_loss": 14231.049447056226,
+    "component_sum_error": 2.079298409099211e-16,
+    "gain_ambiguity": [],
+    "heldout_loss": 2063.744403456444,
+    "mask_sum_error": 1.0037572227277883e-16,
+    "mean_sdr_db": 25.68929977111519,
+    "oracle_grouped_sdr": [
+      43.03312422929704,
+      21.97719652197818,
+      12.057578562070354
+    ],
+    "retained": [
+      false,
+      false,
+      true,
+      false,
+      false
+    ],
+    "selected_candidate_kind": "unanchored",
+    "selected_kind_retained": 1,
+    "selected_kind_stable": true,
+    "solution_stable": true
+  },
+  "separable_anchored": {
+    "best_loss": 12876.227723353453,
+    "component_sum_error": 2.092357073698312e-16,
+    "gain_ambiguity": [],
+    "heldout_loss": 1927.6154358509664,
+    "mask_sum_error": 1.0376479233887073e-16,
+    "mean_sdr_db": 14.471388294329754,
+    "oracle_grouped_sdr": [
+      38.67323091738302,
+      22.37624231689082,
+      12.542209456660743
+    ],
+    "retained": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false
+    ],
+    "selected_candidate_kind": "anchored",
+    "selected_kind_retained": 2,
+    "selected_kind_stable": true,
+    "solution_stable": true
+  }
+}

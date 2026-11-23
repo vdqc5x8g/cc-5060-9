@@ -1,0 +1,117 @@
+{
+  "leakage_matrix_db": [
+    [
+      -44.64382876454071,
+      -21.33985561933832,
+      -0.23386068079150238
+    ],
+    [
+      -0.0005892549176635745,
+      -76.67077977040205,
+      -82.70814265133865
+    ],
+    [
+      -32.14524302275413,
+      -8.466974887993143,
+      -34.1845218915392
+    ],
+    [
+      -73.27060304443762,
+      -0.12486258111494658,
+      -37.31471160637529
+    ]
+  ],
+  "mean_sdr_db": 14.471388294329754,
+  "mean_sdr_note": "mean over matched estimate/reference pairs only",
+  "n_estimates": 4,
+  "n_matched": 3,
+  "oracle_grouped_sdr": [
+    38.67323091738302,
+    22.37624231689082,
+    12.542209456660743
+  ],
+  "oracle_grouping": [
+    [
+      1
+    ],
+    [
+      2,
+      3
+    ],
+    [
+      0
+    ]
+  ],
+  "per_estimate": [
+    {
+      "dominant_leak_reference": "band_noise",
+      "estimate_index": 0,
+      "leakage_db_to": {
+        "band_noise": -0.23386068079150238,
+        "high_bell": -21.33985561933832,
+        "low_harmonic": -44.64382876454071
+      },
+      "matched_reference": "band_noise",
+      "matched_reference_index": 2,
+      "sdr_db": 12.542209456660743,
+      "si_sdr_db": 12.54221110049844,
+      "spectral_convergence": 0.13158857833502638,
+      "spectrogram_mse": 0.005128637860046589
+    },
+    {
+      "dominant_leak_reference": "low_harmonic",
+      "estimate_index": 1,
+      "leakage_db_to": {
+        "band_noise": -82.70814265133865,
+        "high_bell": -76.67077977040205,
+        "low_harmonic": -0.0005892549176635745
+      },
+      "matched_reference": "low_harmonic",
+      "matched_reference_index": 0,
+      "sdr_db": 38.67323091738302,
+      "si_sdr_db": 38.67327259284278,
+      "spectral_convergence": 0.01077453395589552,
+      "spectrogram_mse": 0.0008908756455917601
+    },
+    {
+      "dominant_leak_reference": "high_bell",
+      "estimate_index": 2,
+      "leakage_db_to": {
+        "band_noise": -34.1845218915392,
+        "high_bell": -8.466974887993143,
+        "low_harmonic": -32.14524302275413
+      },
+      "matched_reference": "high_bell",
+      "matched_reference_index": 1,
+      "sdr_db": -7.801275491054503,
+      "si_sdr_db": -7.801275490654966,
+      "spectral_convergence": 0.9459821138705384,
+      "spectrogram_mse": 2.3502587312110186
+    },
+    {
+      "dominant_leak_reference": "high_bell",
+      "estimate_index": 3,
+      "leakage_db_to": {
+        "band_noise": -37.31471160637529,
+        "high_bell": -0.12486258111494658,
+        "low_harmonic": -73.27060304443762
+      },
+      "matched_reference": null,
+      "matched_reference_index": null,
+      "sdr_db": null,
+      "si_sdr_db": null,
+      "spectral_convergence": null,
+      "spectrogram_mse": null
+    }
+  ],
+  "permutation": [
+    2,
+    0,
+    1
+  ],
+  "reference_labels": [
+    "low_harmonic",
+    "high_bell",
+    "band_noise"
+  ]
+}

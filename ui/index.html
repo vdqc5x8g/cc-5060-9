@@ -1,0 +1,620 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>NMF part inspector</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#272c36; --fg:#e6e8ee; --muted:#9aa4b2;
+          --accent:#6ea8fe; --warn:#f0b46c; --bad:#ef7b7b; --ok:#74d99f; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+  header { padding:14px 18px; border-bottom:1px solid var(--line); display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
+  h1 { font-size:16px; margin:0; font-weight:600; }
+  select, input, button { background:#0b0d11; color:var(--fg); border:1px solid var(--line);
+                           border-radius:6px; padding:6px 9px; font:inherit; }
+  button { cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  main { padding:16px 18px 60px; max-width:1240px; margin:0 auto; }
+  .grid { display:grid; gap:14px; }
+  .cols2 { grid-template-columns: 1fr 1fr; }
+  @media (max-width: 900px) { .cols2 { grid-template-columns: 1fr; } }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; }
+  .panel h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:0 0 10px; }
+  .muted { color:var(--muted); }
+  .warn { color:var(--warn); }
+  .bad { color:var(--bad); }
+  .ok { color:var(--ok); }
+  code { background:#0b0d11; padding:1px 5px; border-radius:4px; font-size:12px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:5px 7px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:500; }
+  canvas { width:100%; height:auto; display:block; background:#0b0d11; border-radius:6px;
+           border:1px solid var(--line); }
+  .track { display:grid; grid-template-columns: 92px 1fr 150px 54px 54px; gap:8px; align-items:center;
+           padding:7px 0; border-bottom:1px solid var(--line); }
+  .track .name { font-weight:600; }
+  audio { width:100%; height:32px; }
+  .swatch { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .pill { font-size:11px; padding:2px 7px; border-radius:999px; border:1px solid var(--line); color:var(--muted); }
+  .pill.ok { color:var(--ok); border-color:#2d5c43; }
+  .pill.bad { color:var(--bad); border-color:#5c2d2d; }
+  .pill.warn { color:var(--warn); border-color:#5c4a2d; }
+  .note { border-left:3px solid var(--warn); padding:8px 11px; background:#211c14; border-radius:0 6px 6px 0;
+          font-size:13px; margin:10px 0; }
+  .list { display:flex; flex-direction:column; gap:6px; }
+  .tplrow { display:grid; grid-template-columns: 42px 1fr 90px 90px; gap:8px; align-items:center; font-size:12px; }
+  label { user-select:none; }
+  .bar { height:7px; background:#0b0d11; border-radius:4px; overflow:hidden; border:1px solid var(--line); }
+  .bar > i { display:block; height:100%; background:var(--accent); }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>NMF part inspector</h1>
+  <select id="runs" aria-label="run"></select>
+  <button id="reload">Reload</button>
+  <span class="muted" id="runmeta"></span>
+</header>
+<main class="grid" id="main">
+  <div class="panel">
+    <div class="note">
+      Components below are <b>NMF templates and activations, not instrument names</b>. A component
+      is a basis spectrum × activation. Grouping is yours; labels you type are unverified.
+      Numbers shown are measured from the fitted model, and ground-truth metrics appear only for
+      runs whose mixture had known stems (used for evaluation, never for reconstruction).
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Run state</h2>
+    <div id="stateline" class="muted">loading…</div>
+  </div>
+
+  <div class="grid cols2">
+    <div class="panel">
+      <h2>Templates — spectral basis (shapes)</h2>
+      <canvas id="templates" width="620" height="300"></canvas>
+    </div>
+    <div class="panel">
+      <h2>Activations — template gain over time</h2>
+      <canvas id="activations" width="620" height="300"></canvas>
+      <div id="segmentInfo" class="muted" style="margin-top:8px; font-size:12px">
+        Drag on the activation plot to select a time segment, then “Render selection” to audition
+        only that segment. Selection is a playback gate; it does not change the decomposition.
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Solo / audition components</h2>
+    <div class="row" style="margin-bottom:8px">
+      <span class="muted">Mixture</span>
+      <audio id="mixture" controls preload="none"></audio>
+    </div>
+    <div id="tracks" class="list"></div>
+    <div class="row" style="margin-top:12px">
+      <label><input type="checkbox" id="soloMode" /> solo selected (others muted)</label>
+      <span class="muted">Gain per stem in dB; summed stems are rendered server-side.</span>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button id="render">Render selection</button>
+      <audio id="rendered" controls preload="none"></audio>
+    </div>
+  </div>
+
+  <div class="grid cols2">
+    <div class="panel">
+      <h2>Group components (user-defined)</h2>
+      <div id="groupEditor" class="list"></div>
+      <div id="groupHint" class="muted" style="margin-top:8px"></div>
+      <div class="row" style="margin-top:10px">
+        <label>policy
+          <select id="policy">
+            <option value="wiener">wiener (soft, partition of unity)</option>
+            <option value="residual">residual (sum equals mixture)</option>
+            <option value="binary">binary (one-hot)</option>
+          </select>
+        </label>
+        <label>power <input id="power" type="number" value="1.0" step="0.1" min="0.1" max="4" style="width:70px"/></label>
+        <button id="applyGroups">Apply grouping</button>
+        <button id="addGroup">Add group</button>
+      </div>
+      <div id="groupResult" class="muted" style="margin-top:10px"></div>
+      <div id="groupAudio" class="list" style="margin-top:10px"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Candidate solutions and ambiguity</h2>
+      <div id="cands"></div>
+      <div id="ambig"></div>
+    </div>
+  </div>
+
+  <div class="panel" id="evalPanel">
+    <h2>Ground-truth evaluation (known synthetic stems only)</h2>
+    <div id="evalBody" class="muted">This run had no ground-truth stems.</div>
+  </div>
+
+  <div class="panel">
+    <h2>Figures</h2>
+    <div id="figs" class="grid cols2"></div>
+  </div>
+</main>
+
+<script>
+const $ = (sel) => document.querySelector(sel);
+const COLORS = ['#6ea8fe','#f0b46c','#74d99f','#d38af5','#ef7b7b','#5ad1d1','#b6c36b','#f19ad1','#9aa4b2','#c9a227'];
+let state = { run: null, data: null, gains: {}, selected: new Set(), segment: null };
+
+function fmt(x, d=2) { return (x === null || x === undefined || Number.isNaN(x)) ? '—' : Number(x).toFixed(d); }
+function el(tag, attrs={}, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k,v] of Object.entries(attrs)) {
+    if (k === 'class') n.className = v; else if (k === 'html') n.innerHTML = v; else n.setAttribute(k, v);
+  }
+  for (const k of kids) n.append(k instanceof Node ? k : document.createTextNode(String(k)));
+  return n;
+}
+async function jget(url) { const r = await fetch(url); if (!r.ok) throw new Error((await r.json()).error || r.status); return r.json(); }
+async function jpost(url, body) {
+  const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  const data = await r.json(); if (!r.ok) throw new Error(data.error || r.status); return data;
+}
+function audioUrl(name, sub='') { return `api/run/${encodeURIComponent(state.run)}/audio/${encodeURIComponent(name)}`; }
+
+async function loadRuns() {
+  const {runs} = await jget('api/runs');
+  const sel = $('#runs'); sel.innerHTML = '';
+  if (!runs.length) { sel.append(el('option', {value:''}, 'no runs yet — run `python -m nmfsep.cli demo`')); return; }
+  for (const r of runs) {
+    const label = `${r.id}  ·  K=${r.n_templates}${r.anchored?' · anchored':''}${r.has_evaluation?' · eval':''}`;
+    sel.append(el('option', {value:r.id}, label));
+  }
+  const wanted = new URLSearchParams(location.search).get('run');
+  if (wanted && runs.some(r => r.id === wanted)) sel.value = wanted;
+  await loadRun(sel.value);
+}
+
+async function loadRun(id) {
+  if (!id) return;
+  state.run = id; state.selected = new Set(); state.gains = {};
+  history.replaceState(null, '', `?run=${encodeURIComponent(id)}`);
+  const data = await jget(`api/run/${encodeURIComponent(id)}`);
+  state.data = data;
+  renderAll();
+}
+
+function pill(text, kind='') { return el('span', {class:`pill ${kind}`}, text); }
+
+function renderAll() {
+  const d = state.data, diag = d.diagnostics, cfg = d.config;
+  $('#mixture').src = audioUrl('mixture.wav');
+  const ev = d.evaluation;
+  $('#runmeta').textContent =
+    `${diag.sample_rate} Hz · ${diag.n_frames} frames · K=${d.templates.n_templates} · policy=${diag.policy}`;
+
+  const stable = diag.selected_kind_stable ?? diag.solution_stable;
+  const unident = diag.any_unidentifiable_gain_split;
+  const retained = diag.selected_kind_retained ?? (diag.candidate_retained||[]).filter(Boolean).length;
+  const nCand = diag.selected_kind_n_candidates ?? diag.candidate_retained.length;
+  const selIdx = diag.selected_candidate_index;
+  const selKind = diag.selected_candidate_kind || (diag.candidate_meta||[])[selIdx]?.kind;
+  const line = el('div', {class:'row'},
+    retained >= 2
+      ? pill(stable ? `${selKind} solutions stable` : `${selKind} ambiguity`, stable ? 'ok' : 'warn')
+      : pill(`single ${selKind} candidate within loss threshold — no stability comparison`, 'warn'),
+    pill(unident ? 'gain split unidentifiable' : 'gain split observable', unident ? 'bad' : 'ok'),
+    pill(`${retained}/${nCand} ${selKind} candidates retained within ${fmt(cfg.retain_rtol*100,1)}% loss`),
+    pill(`shown: candidate ${selIdx}${selKind ? ' (' + selKind + ')' : ''}`),
+    pill(`stop: ${diag.stop_reason}`),
+    pill(`iters: ${diag.n_iter}`),
+    pill(`silent frames: ${diag.silent_frame_count}`),
+    pill(`anchored: ${diag.anchored ? diag.anchor_names.join(', ') : 'no'}`),
+    pill(`mask Σ error: ${diag.mask_sum_error.toExponential(1)}`),
+    pill(`stem Σ error: ${diag.component_sum_error.toExponential(1)}`),
+  );
+  $('#stateline').replaceChildren(line, el('div', {class:'muted', style:'margin-top:8px'},
+    `objective: ${cfg.objective} (β=${cfg.beta}) · best loss ${fmt(diag.best_loss,1)} · held-out loss ${fmt(diag.heldout_loss,1)} · ε=${diag.eps?.toExponential?.(2)} · params ${diag.n_parameters}`));
+
+  drawTemplates(); drawActivations(); renderTracks(); renderCandidates(); renderAmbig();
+  renderGroups(); renderEval(); renderFigures(); updateSegmentInfo();
+}
+
+function drawTemplates() {
+  const c = $('#templates'), ctx = c.getContext('2d');
+  const t = state.data.templates;
+  const sr = state.data.diagnostics.sample_rate;
+  const nBins = t.n_bins, maxHz = sr / 2;
+  const W = c.width, H = c.height, padL = 40, padB = 30, padT = 22;
+  ctx.clearRect(0,0,W,H);
+  const shapes = t.shapes_db || [];
+  const yOf = db => padT + (H-padT-padB) * (1 - (db + 45) / 45);
+  const xOf = bin => padL + (W-padL-8) * Math.log1p(bin) / Math.log1p(nBins-1);
+  // grid
+  ctx.strokeStyle = '#272c36'; ctx.fillStyle = '#9aa4b2'; ctx.font='11px system-ui';
+  for (const db of [0,-15,-30,-45]) {
+    const y = yOf(db); ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W-8, y); ctx.stroke();
+    ctx.fillText(`${db} dB`, 4, y+4);
+  }
+  for (let i=0;i<=4;i++) {
+    const bin = Math.round((nBins-1) * (Math.exp(i/4*Math.log1p(nBins-1))-1) / (nBins-1));
+    const hz = bin * sr / (2*(nBins-1));
+    const x = xOf(bin);
+    ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, H-padB); ctx.stroke();
+    ctx.fillText(hz>=1000 ? `${(hz/1000).toFixed(1)}k` : `${hz.toFixed(0)}`, x-8, H-padB+15);
+  }
+  shapes.forEach((sh, k) => {
+    const edges = sh.bin_edges, db = sh.db;
+    ctx.strokeStyle = COLORS[k%COLORS.length]; ctx.lineWidth = 1.4; ctx.beginPath();
+    for (let i=0;i<db.length;i++) {
+      const bin = (edges[i] + edges[i+1])/2;
+      const x = xOf(bin), y = yOf(db[i]);
+      i ? ctx.lineTo(x,y) : ctx.moveTo(x,y);
+    }
+    ctx.stroke();
+  });
+  // legend
+  let lx = padL + 6, ly = H - 8;
+  shapes.forEach((_, k) => {
+    ctx.fillStyle = COLORS[k%COLORS.length];
+    ctx.fillRect(lx, ly-8, 10, 3);
+    ctx.fillStyle = '#e6e8ee'; ctx.font='11px system-ui';
+    const label = `T${k} ${fmt(t.peak_hz[k],0)} Hz`;
+    ctx.fillText(label, lx+14, ly);
+    lx += 20 + ctx.measureText(label).width;
+    if (lx > W - 100) { lx = padL + 6; ly -= 14; }
+  });
+}
+
+function activationDuration() {
+  const dg = state.data.diagnostics;
+  return dg.n_samples && dg.sample_rate ? dg.n_samples / dg.sample_rate : null;
+}
+
+function drawActivations() {
+  const c = $('#activations'), ctx = c.getContext('2d');
+  const a = state.data.activation_summary, W = c.width, H = c.height, pad = 34;
+  ctx.clearRect(0,0,W,H);
+  const n = a.rows.length, cols = a.n_frames;
+  ctx.fillStyle = '#9aa4b2'; ctx.font='12px system-ui';
+  ctx.fillText('normalised activation per template (0…1 over its own range)', pad, 16);
+  if (state.segment) {
+    const dur = activationDuration() || 1;
+    const xOf = t => pad + (W-pad-8) * (t / dur);
+    const x0 = xOf(state.segment.start_s), x1 = xOf(state.segment.end_s);
+    ctx.fillStyle = 'rgba(110,168,254,0.18)';
+    ctx.fillRect(x0, 22, x1-x0, H-30);
+    ctx.strokeStyle = 'rgba(110,168,254,0.7)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x0, 22); ctx.lineTo(x0, H-8);
+    ctx.moveTo(x1, 22); ctx.lineTo(x1, H-8); ctx.stroke();
+  }
+  for (let k=0;k<n;k++) {
+    const row = a.rows[k], y0 = 26 + k*(H-40)/n, h = (H-46)/n;
+    ctx.strokeStyle = COLORS[k%COLORS.length]; ctx.lineWidth = 1.1; ctx.beginPath();
+    for (let i=0;i<cols;i++) {
+      const x = pad + (W-pad-8)*i/(cols-1||1), y = y0 + h - row[i]*h;
+      i ? ctx.lineTo(x,y) : ctx.moveTo(x,y);
+    }
+    ctx.stroke();
+    ctx.fillStyle = COLORS[k%COLORS.length]; ctx.font='11px system-ui';
+    ctx.fillText(`T${k}`, 8, y0 + h - 2);
+  }
+  ctx.fillStyle = '#9aa4b2'; ctx.fillText('time →', W-56, H-6);
+  const dur = activationDuration();
+  if (dur) {
+    ctx.font = '10px system-ui';
+    for (let f=0; f<=1; f+=0.25) {
+      const x = pad + (W-pad-8)*f;
+      ctx.fillText(`${(dur*f).toFixed(1)}s`, Math.min(x, W-30), H-18);
+    }
+  }
+}
+
+function segmentFromX(evt) {
+  const c = $('#activations'), r = c.getBoundingClientRect();
+  const pad = 34, W = c.width;
+  const x = (evt.clientX - r.left) * (W / r.width);
+  const f = Math.max(0, Math.min(1, (x - pad) / (W - pad - 8)));
+  const dur = activationDuration();
+  return dur ? f * dur : null;
+}
+
+function bindSegmentSelection() {
+  const c = $('#activations');
+  let dragStart = null;
+  c.addEventListener('mousedown', evt => {
+    const t = segmentFromX(evt);
+    if (t === null) return;
+    dragStart = t;
+    state.segment = null;
+    const move = e => {
+      const t2 = segmentFromX(e);
+      if (t2 === null) return;
+      const a = Math.min(dragStart, t2), b = Math.max(dragStart, t2);
+      state.segment = (b - a > 0.01) ? {start_s: a, end_s: b} : null;
+      updateSegmentInfo();
+      drawActivations();
+    };
+    const up = () => {
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+      dragStart = null;
+      updateSegmentInfo();
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  });
+  c.addEventListener('dblclick', () => { state.segment = null; updateSegmentInfo(); drawActivations(); });
+}
+
+function updateSegmentInfo() {
+  const box = $('#segmentInfo');
+  if (!box) return;
+  box.innerHTML = '';
+  if (!state.segment) {
+    box.append(el('span', {}, 'Drag on the activation plot to select a time segment. Double-click to clear.'));
+    return;
+  }
+  box.append(el('span', {class:'ok'},
+    `segment ${state.segment.start_s.toFixed(2)}–${state.segment.end_s.toFixed(2)} s selected.`));
+  box.append(el('button', {id:'clearSeg', style:'margin-left:8px'}, 'Clear'));
+  $('#clearSeg').addEventListener('click', () => {
+    state.segment = null; updateSegmentInfo(); drawActivations();
+  });
+}
+
+function renderTracks() {
+  const d = state.data, box = $('#tracks'); box.innerHTML = '';
+  const gains = state.data.templates.gain_db || [];
+  d.stems.forEach((name, k) => {
+    const row = el('div', {class:'track'});
+    row.append(el('div', {class:'name'}, el('span', {class:'swatch', style:`background:${COLORS[k%COLORS.length]}`}), `T${k}`));
+    const au = el('audio', {controls:'', preload:'none', src: audioUrl(name)});
+    row.append(au);
+    row.append(el('div', {class:'muted', style:'font-size:12px'},
+      `gain ${fmt(gains[k],1)} dB · peak ${fmt(d.templates.peak_hz[k],0)} Hz`));
+    const cb = el('input', {type:'checkbox'});
+    cb.addEventListener('change', () => {
+      if (cb.checked) state.selected.add(k); else state.selected.delete(k);
+    });
+    row.append(el('label', {class:'muted', style:'font-size:11px'}, cb, ' solo'));
+    const gain = el('input', {type:'number', value:'0', step:'1', style:'width:52px', title:'gain dB'});
+    gain.addEventListener('input', () => { state.gains[k] = Number(gain.value); });
+    row.append(gain);
+    box.append(row);
+  });
+}
+
+function renderCandidates() {
+  const diag = state.data.diagnostics, box = $('#cands'); box.innerHTML = '';
+  const meta = diag.candidate_meta || [];
+  const table = el('table');
+  table.append(el('tr', {}, ...['#','kind','init','seed','loss','gap %','retained','shown','iters','stop']
+    .map(h => el('th', {}, h))));
+  (diag.candidate_losses||[]).forEach((loss, i) => {
+    const m = meta[i] || {};
+    table.append(el('tr', {},
+      el('td', {}, i),
+      el('td', {}, m.kind || ''),
+      el('td', {}, m.init || ''),
+      el('td', {}, m.seed ?? ''),
+      el('td', {}, fmt(loss, 1)),
+      el('td', {}, fmt((diag.candidate_gaps||[])[i]*100, 3)),
+      el('td', {}, (diag.candidate_retained||[])[i] ? 'yes' : 'no'),
+      el('td', {}, i === diag.selected_candidate_index ? '●' : ''),
+      el('td', {}, (diag.candidate_meta||[])[i]?.n_iter ?? ''),
+      el('td', {}, (diag.candidate_meta||[])[i]?.stop_reason ?? ''),
+    ));
+  });
+  box.append(table);
+  const sims = diag.candidate_similarities || [];
+  if (sims.length) {
+    const t = el('table');
+    t.append(el('tr', {}, ...['cand','min template cosine vs best','max |gain ratio|'].map(h=>el('th',{},h))));
+    sims.forEach((s, i) => {
+      const g = (diag.candidate_gain_ratios||[])[i] || [];
+      const maxg = g.length ? Math.max(...g.map(x => Math.max(x, 1/Math.max(x,1e-9)))) : null;
+      t.append(el('tr', {}, el('td',{},i), el('td',{}, fmt(Math.min(...s),4)), el('td',{}, fmt(maxg,3))));
+    });
+    box.append(el('div', {class:'muted', style:'margin-top:10px; font-size:12px'},
+      'Templates matched with Hungarian assignment on cosine similarity. A solution agrees only if shapes and per-template gains agree; otherwise both are kept.'),
+      t);
+  }
+}
+
+function renderAmbig() {
+  const diag = state.data.diagnostics, box = $('#ambig'); box.innerHTML = '';
+  const pairs = diag.similar_template_pairs || [];
+  if (pairs.length) {
+    const pt = el('table');
+    pt.append(el('tr', {}, ...['most similar template pair','cosine','gains dB'].map(h=>el('th',{},h))));
+    pairs.forEach(p => pt.append(el('tr', {},
+      el('td', {}, `T${p.templates[0]} / T${p.templates[1]}`),
+      el('td', {}, fmt(p.cosine, 4)),
+      el('td', {}, `${fmt(p.gains_db[0],1)} / ${fmt(p.gains_db[1],1)}`),
+    )));
+    box.append(el('div', {class:'muted', style:'font-size:12px; margin-bottom:6px'},
+      'Cosine similarity of fitted template shapes. High values mean two components may describe the same source; this is a grouping cue, not a source identity.'),
+      pt);
+  }
+  const probes = diag.gain_ambiguity_probes || [];
+  if (!probes.length) {
+    box.append(el('div', {class:'note', style:'margin-top:8px'},
+      'No pair of fitted templates is close enough (cosine ≥ 0.995) to test a gain split. Absence of a probe is not proof that gains are identifiable.'));
+    return;
+  }
+  const t = el('table');
+  t.append(el('tr', {}, ...['pair','template cos','loss change if merged','gain split','unidentifiable']
+    .map(h=>el('th',{},h))));
+  probes.forEach(p => {
+    t.append(el('tr', {},
+      el('td', {}, `T${p.templates[0]} / T${p.templates[1]}`),
+      el('td', {}, fmt(p.template_cosine, 4)),
+      el('td', {}, (p.loss_relative_change*100).toFixed(3) + ' %'),
+      el('td', {}, `${fmt(p.gains_db[0],1)} / ${fmt(p.gains_db[1],1)} dB`),
+      el('td', {}, p.unidentifiable_gain_split ? 'yes' : 'no'),
+    ));
+  });
+  box.append(el('div', {class:'note', style:'margin-top:10px'},
+    'Merging a pair of near-identical templates changes the objective by less than the retention threshold: the data cannot decide how much gain belongs to each. The listed gain split is one representative, not a measurement.'),
+    t);
+}
+
+function renderGroups() {
+  const box = $('#groupEditor'); box.innerHTML = '';
+  const n = state.data.templates.n_templates;
+  state.groups = [Array.from({length: n}, (_, k) => k)];
+  state.groups.forEach((g, gi) => box.append(groupRow(g, gi, n)));
+  updateGroupHint();
+}
+
+function groupBoxes() {
+  return [...document.querySelectorAll('#groupEditor .tplrow')].map(row =>
+    [...row.querySelectorAll('input[type=checkbox]')]);
+}
+
+function updateGroupHint() {
+  const hint = $('#groupHint');
+  if (!hint) return;
+  const seen = new Set(), dup = [];
+  for (const g of state.groups) for (const k of g) {
+    if (seen.has(k)) dup.push(k); else seen.add(k);
+  }
+  const n = state.data.templates.n_templates;
+  const missing = [];
+  for (let k=0;k<n;k++) if (!seen.has(k)) missing.push(k);
+  hint.innerHTML = '';
+  hint.append(el('span', {class:'muted'}, `${state.groups.length} group(s)`));
+  if (dup.length) hint.append(el('span', {class:'bad'}, ` · template(s) ${dup.map(k=>'T'+k).join(', ')} in more than one group`));
+  if (missing.length) hint.append(el('span', {class:'warn'}, ` · template(s) ${missing.map(k=>'T'+k).join(', ')} in no group (they will not be attributed)`));
+}
+
+function groupRow(g, gi, n) {
+  const row = el('div', {class:'tplrow'});
+  const label = el('input', {type:'text', value: `group ${gi}`, style:'width:76px'});
+  const checks = el('div', {class:'row', style:'gap:10px'});
+  const boxes = [];
+  for (let k=0;k<n;k++) {
+    const cb = el('input', {type:'checkbox'});
+    cb.checked = g.includes(k);
+    cb.addEventListener('change', () => {
+      const cur = state.groups[gi];
+      const idx = cur.indexOf(k);
+      if (cb.checked && idx < 0) cur.push(k);
+      if (!cb.checked && idx >= 0) cur.splice(idx, 1);
+      updateGroupHint();
+    });
+    boxes.push(cb);
+    checks.append(el('label', {style:'font-size:12px'}, cb, `T${k}`));
+  }
+  row.append(label, checks, el('span', {class:'muted', style:'font-size:11px'}, 'templates'), el('span', {}, ''));
+  row._label = label;
+  return row;
+}
+
+async function applyGroups() {
+  const seen = new Set();
+  for (const g of state.groups) for (const k of g) {
+    if (seen.has(k)) { $('#groupResult').innerHTML = `<span class="bad">Template T${k} is in more than one group.</span>`; return; }
+    seen.add(k);
+  }
+  const groups = state.groups.filter(g => g.length);
+  if (!groups.length) { $('#groupResult').textContent = 'Assign at least one template to a group.'; return; }
+  const labels = Array.from(document.querySelectorAll('#groupEditor .tplrow input[type=text]')).map(i => i.value);
+  const body = {groups, labels: labels.slice(0, groups.length), policy: $('#policy').value, power: Number($('#power').value)};
+  try {
+    const res = await jpost(`api/run/${encodeURIComponent(state.run)}/group`, body);
+    const box = $('#groupResult'); box.innerHTML = '';
+    box.append(el('div', {},
+      `policy ${res.policy} · mask Σ error ${res.mask_sum_error.toExponential(1)} · stem Σ error ${res.component_sum_error.toExponential(1)} · residual energy ${(res.residual_energy_ratio*100).toFixed(2)} %`));
+    box.append(el('div', {class:'warn'}, res.note));
+    if (res.ground_truth_eval) {
+      const ge = res.ground_truth_eval;
+      box.append(el('div', {class:'muted', style:'margin-top:6px'},
+        `Ground-truth check of this exact grouping: permutation ${ge.permutation.join(',')} → mean SDR ${fmt(ge.mean_sdr_db,2)} dB (${ge.reference_labels.join(', ')})`));
+      box.append(el('div', {class:'muted', style:'font-size:12px'},
+        `per group: ${ge.per_group_sdr_db.map(v=>fmt(v,2)).join(', ')} dB`));
+    }
+    const audio = $('#groupAudio'); audio.innerHTML = '';
+    res.stems.forEach((s, i) => {
+      audio.append(el('div', {class:'row'},
+        el('span', {class:'muted', style:'width:130px'}, res.labels[i]),
+        el('audio', {controls:'', preload:'none', src: audioUrl(s)})));
+    });
+    state.data.grouped = res.stems;
+  } catch (e) { $('#groupResult').textContent = 'error: ' + e.message; }
+}
+
+function renderEval() {
+  const ev = state.data.evaluation, box = $('#evalBody');
+  if (!ev) { box.textContent = 'This run had no ground-truth stems. No separation metrics are claimed.'; return; }
+  box.innerHTML = '';
+  const evp = ev.per_estimate || [];
+  const t = el('table');
+  t.append(el('tr', {}, ...['estimate','matched ref (eval only)','SDR dB','SI-SDR dB','spectral conv.','spec MSE','dominant leak']
+    .map(h=>el('th',{},h))));
+  evp.forEach(p => t.append(el('tr', {},
+    el('td',{},p.estimate_index),
+    el('td',{},p.matched_reference ?? '— (unmatched)'),
+    el('td',{},fmt(p.sdr_db,2)),
+    el('td',{},fmt(p.si_sdr_db,2)),
+    el('td',{},p.spectral_convergence === null ? '—' : p.spectral_convergence.toExponential(2)),
+    el('td',{},p.spectrogram_mse === null ? '—' : p.spectrogram_mse.toExponential(2)),
+    el('td',{},p.dominant_leak_reference ? `${p.dominant_leak_reference}` : '—'),
+  )));
+  box.append(el('div', {class:'muted', style:'margin-bottom:8px'},
+    'Permutation-maximised mean SDR is a summary, not a per-source claim. Read per-estimate rows and the leakage matrix. Matching uses ground truth and is evaluation-only.'),
+    t);
+  if (ev.oracle_grouping) {
+    box.append(el('div', {class:'muted', style:'margin-top:8px'},
+      `Oracle grouping (ground-truth upper bound for grouping this decomposition): ${JSON.stringify(ev.oracle_grouping)} → ` +
+      `SDR ${ev.oracle_grouped_sdr?.map(v=>fmt(v,2)).join(', ')} dB`));
+  }
+  const L = ev.leakage_matrix_db;
+  if (L) {
+    const lt = el('table');
+    lt.append(el('tr', {}, el('th',{},'estimate \\ ref'), ...ev.reference_labels.map(l=>el('th',{},l))));
+    L.forEach((row, i) => lt.append(el('tr', {}, el('td',{},`est ${i}`),
+      ...row.map(v=>el('td',{},fmt(v,1))))));
+    box.append(el('div', {class:'muted', style:'margin-top:12px'}, 'Projection leakage (dB). Diagonal ≈ wanted energy, off-diagonal = leakage.'), lt);
+  }
+}
+
+function renderFigures() {
+  const box = $('#figs'); box.innerHTML = '';
+  const figs = state.data.figures || [];
+  if (!figs.length) { box.append(el('div',{class:'muted'}, 'No figures generated for this run.')); return; }
+  figs.forEach(f => box.append(el('div', {}, el('div',{class:'muted',style:'font-size:12px'},f),
+    el('img', {src: `figures/${encodeURIComponent(f)}`, style:'width:100%; border-radius:6px; border:1px solid var(--line)'}))));
+}
+
+$('#runs').addEventListener('change', e => loadRun(e.target.value));
+$('#reload').addEventListener('click', () => loadRuns());
+$('#applyGroups').addEventListener('click', applyGroups);
+$('#render').addEventListener('click', async () => {
+  let stems = Array.from(state.selected);
+  const soloMode = $('#soloMode').checked;
+  if (soloMode && stems.length) stems = stems; else stems = state.data.stems.map((_,i)=>i);
+  try {
+    const gains = {};
+    for (const [k,v] of Object.entries(state.gains)) gains[k] = v;
+    const body = {stems, gains_db: gains};
+    if (state.segment) { body.start_s = state.segment.start_s; body.end_s = state.segment.end_s; }
+    const res = await jpost(`api/run/${encodeURIComponent(state.run)}/solo`, body);
+    const au = $('#rendered'); au.src = audioUrl(res.file) + `?t=${Date.now()}`; au.play().catch(()=>{});
+  } catch (e) { alert('error: ' + e.message); }
+});
+$('#addGroup').addEventListener('click', () => {
+  const n = state.data.templates.n_templates;
+  state.groups.push([]);
+  $('#groupEditor').append(groupRow([], state.groups.length-1, n));
+  updateGroupHint();
+});
+
+loadRuns().catch(e => { document.body.append(el('pre',{class:'bad'}, 'Failed to load: '+e.message)); });
+bindSegmentSelection();
+</script>
+</body>
+</html>

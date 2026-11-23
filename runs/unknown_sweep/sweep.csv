@@ -1,0 +1,9 @@
+n_templates,best_loss,heldout_loss,per_template_loss,params,params_per_frame,mean_sdr_db,oracle_grouped_mean_sdr,stable,retained,candidates,gain_ambiguity,stop_reason,iters,mask_sum_error,component_sum_error,elapsed_s
+2,38444.9,5383.14,19222.5,4474,2.59513,,,False,2,4,False,relative_tolerance,99,8.36908e-17,2.08003e-16,9.03
+3,31376.5,4364.01,10458.8,6711,3.89269,,,True,1,4,False,relative_tolerance,274,9.43112e-17,2.08912e-16,19.26
+4,27947.7,3909.58,6986.92,8948,5.19026,,,True,1,4,False,relative_tolerance,169,9.97288e-17,2.125e-16,21.62
+5,25251.3,3430.2,5050.27,11185,6.48782,,,False,2,4,False,relative_tolerance,199,1.04094e-16,2.11979e-16,22.3
+6,21583,2972.6,3597.17,13422,7.78538,,,True,1,4,False,relative_tolerance,188,9.42958e-17,2.10692e-16,29.48
+7,19114.1,2582.45,2730.59,15659,9.08295,,,True,1,4,False,relative_tolerance,226,1.05059e-16,2.12425e-16,19.27
+8,16661.1,2258.68,2082.64,17896,10.3805,,,True,1,4,False,relative_tolerance,317,1.17302e-16,2.16295e-16,34.26
+9,15615.1,2090.48,1735.01,20133,11.6781,,,True,1,4,False,relative_tolerance,240,1.14442e-16,2.17312e-16,34.23

@@ -1,0 +1,26 @@
+{
+  "anchor_source": null,
+  "beta": 1.0,
+  "heldout_fraction": 0.15,
+  "hop_length": 256,
+  "init": "grid",
+  "mask_power": 1.0,
+  "min_iter": 10,
+  "n_fft": 1024,
+  "n_iter_cap": 400,
+  "n_templates": 9,
+  "objective": "generalised KL",
+  "patience": 15,
+  "policy": "wiener",
+  "retain_rtol": 0.01,
+  "seeds": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "silence_rel": 1e-08,
+  "stability_cos": 0.98,
+  "tol": 1e-05,
+  "window": "hann(periodic)"
+}

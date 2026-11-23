@@ -1,0 +1,73 @@
+{
+  "leakage_matrix_db": [
+    [
+      -3.400308479651582,
+      -3.400281400323497,
+      -140.40478880607733
+    ],
+    [
+      -125.5092143856301,
+      -121.5192859046129,
+      -2.98100129379048e-07
+    ]
+  ],
+  "mean_sdr_db": 36.22637435743996,
+  "mean_sdr_note": "mean over matched estimate/reference pairs only",
+  "n_estimates": 2,
+  "n_matched": 2,
+  "oracle_grouped_sdr": [
+    0.0,
+    0.8185225189190679,
+    71.63422619596085
+  ],
+  "oracle_grouping": [
+    [],
+    [
+      0
+    ],
+    [
+      1
+    ]
+  ],
+  "per_estimate": [
+    {
+      "dominant_leak_reference": "twin_B",
+      "estimate_index": 0,
+      "leakage_db_to": {
+        "distinct_narrowband": -140.40478880607733,
+        "twin_A": -3.400308479651582,
+        "twin_B": -3.400281400323497
+      },
+      "matched_reference": "twin_B",
+      "matched_reference_index": 1,
+      "sdr_db": 0.8185225189190679,
+      "si_sdr_db": 0.8185225108118311,
+      "spectral_convergence": 0.7107152784006593,
+      "spectrogram_mse": 2.0761528383538037
+    },
+    {
+      "dominant_leak_reference": "distinct_narrowband",
+      "estimate_index": 1,
+      "leakage_db_to": {
+        "distinct_narrowband": -2.98100129379048e-07,
+        "twin_A": -125.5092143856301,
+        "twin_B": -121.5192859046129
+      },
+      "matched_reference": "distinct_narrowband",
+      "matched_reference_index": 2,
+      "sdr_db": 71.63422619596085,
+      "si_sdr_db": 71.63422639097153,
+      "spectral_convergence": 0.00024276236370485534,
+      "spectrogram_mse": 1.1783513662651151e-08
+    }
+  ],
+  "permutation": [
+    1,
+    2
+  ],
+  "reference_labels": [
+    "twin_A",
+    "twin_B",
+    "distinct_narrowband"
+  ]
+}

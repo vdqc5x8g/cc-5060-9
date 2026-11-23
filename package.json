@@ -1,0 +1,26 @@
+{
+  "name": "workspace",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vdqc5x8g/cc-5060-9.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/vdqc5x8g/cc-5060-9/issues"
+  },
+  "homepage": "https://github.com/vdqc5x8g/cc-5060-9#readme",
+  "dependencies": {
+    "playwright": "^1.65.1"
+  }
+}

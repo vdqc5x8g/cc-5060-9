@@ -1,0 +1,96 @@
+{
+  "leakage_matrix_db": [
+    [
+      -73.89140887483575,
+      -0.027147768068108334,
+      -34.80142292044191
+    ],
+    [
+      -0.00021578291363937263,
+      -74.28760233349996,
+      -83.17188130841981
+    ],
+    [
+      -43.69408133622461,
+      -22.529553275210525,
+      -0.26101126778406053
+    ]
+  ],
+  "mean_sdr_db": 25.68929977111519,
+  "mean_sdr_note": "mean over matched estimate/reference pairs only",
+  "n_estimates": 3,
+  "n_matched": 3,
+  "oracle_grouped_sdr": [
+    43.03312422929704,
+    21.97719652197818,
+    12.057578562070354
+  ],
+  "oracle_grouping": [
+    [
+      1
+    ],
+    [
+      0
+    ],
+    [
+      2
+    ]
+  ],
+  "per_estimate": [
+    {
+      "dominant_leak_reference": "high_bell",
+      "estimate_index": 0,
+      "leakage_db_to": {
+        "band_noise": -34.80142292044191,
+        "high_bell": -0.027147768068108334,
+        "low_harmonic": -73.89140887483575
+      },
+      "matched_reference": "high_bell",
+      "matched_reference_index": 1,
+      "sdr_db": 21.97719652197818,
+      "si_sdr_db": 21.977196707841937,
+      "spectral_convergence": 0.06562353046909414,
+      "spectrogram_mse": 0.011310166726878075
+    },
+    {
+      "dominant_leak_reference": "low_harmonic",
+      "estimate_index": 1,
+      "leakage_db_to": {
+        "band_noise": -83.17188130841981,
+        "high_bell": -74.28760233349996,
+        "low_harmonic": -0.00021578291363937263
+      },
+      "matched_reference": "low_harmonic",
+      "matched_reference_index": 0,
+      "sdr_db": 43.03312422929704,
+      "si_sdr_db": 43.03325657467185,
+      "spectral_convergence": 0.005317519980221132,
+      "spectrogram_mse": 0.00021698932008992305
+    },
+    {
+      "dominant_leak_reference": "band_noise",
+      "estimate_index": 2,
+      "leakage_db_to": {
+        "band_noise": -0.26101126778406053,
+        "high_bell": -22.529553275210525,
+        "low_harmonic": -43.69408133622461
+      },
+      "matched_reference": "band_noise",
+      "matched_reference_index": 2,
+      "sdr_db": 12.057578562070354,
+      "si_sdr_db": 12.057580316098594,
+      "spectral_convergence": 0.16413977178808806,
+      "spectrogram_mse": 0.007979823668636704
+    }
+  ],
+  "permutation": [
+    1,
+    0,
+    2
+  ],
+  "reference_labels": [
+    "low_harmonic",
+    "high_bell",
+    "band_noise"
+  ]
+}

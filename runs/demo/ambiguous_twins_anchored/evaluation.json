@@ -1,0 +1,96 @@
+{
+  "leakage_matrix_db": [
+    [
+      -3.6550533058296253,
+      -3.6680810467211673,
+      -120.27459285637754
+    ],
+    [
+      -3.625124759633449,
+      -3.6131795941638094,
+      -120.53965247406936
+    ],
+    [
+      -103.34365472600267,
+      -102.66745957724586,
+      -1.179642387696459e-06
+    ]
+  ],
+  "mean_sdr_db": 22.097493392490094,
+  "mean_sdr_note": "mean over matched estimate/reference pairs only",
+  "n_estimates": 3,
+  "n_matched": 3,
+  "oracle_grouped_sdr": [
+    0.2725111299489488,
+    0.3596122717444938,
+    65.66035677577683
+  ],
+  "oracle_grouping": [
+    [
+      0
+    ],
+    [
+      1
+    ],
+    [
+      2
+    ]
+  ],
+  "per_estimate": [
+    {
+      "dominant_leak_reference": "twin_A",
+      "estimate_index": 0,
+      "leakage_db_to": {
+        "distinct_narrowband": -120.27459285637754,
+        "twin_A": -3.6550533058296253,
+        "twin_B": -3.6680810467211673
+      },
+      "matched_reference": "twin_A",
+      "matched_reference_index": 0,
+      "sdr_db": 0.2725111299489488,
+      "si_sdr_db": 0.2725111344643916,
+      "spectral_convergence": 0.4738704979851259,
+      "spectrogram_mse": 0.9229636470614991
+    },
+    {
+      "dominant_leak_reference": "twin_B",
+      "estimate_index": 1,
+      "leakage_db_to": {
+        "distinct_narrowband": -120.53965247406936,
+        "twin_A": -3.625124759633449,
+        "twin_B": -3.6131795941638094
+      },
+      "matched_reference": "twin_B",
+      "matched_reference_index": 1,
+      "sdr_db": 0.3596122717444938,
+      "si_sdr_db": 0.3596122737725622,
+      "spectral_convergence": 0.4933418989849077,
+      "spectrogram_mse": 1.0003777424091473
+    },
+    {
+      "dominant_leak_reference": "distinct_narrowband",
+      "estimate_index": 2,
+      "leakage_db_to": {
+        "distinct_narrowband": -1.179642387696459e-06,
+        "twin_A": -103.34365472600267,
+        "twin_B": -102.66745957724586
+      },
+      "matched_reference": "distinct_narrowband",
+      "matched_reference_index": 2,
+      "sdr_db": 65.66035677577683,
+      "si_sdr_db": 65.66035677817732,
+      "spectral_convergence": 0.0005113683393667223,
+      "spectrogram_mse": 5.2285319528455737e-08
+    }
+  ],
+  "permutation": [
+    0,
+    1,
+    2
+  ],
+  "reference_labels": [
+    "twin_A",
+    "twin_B",
+    "distinct_narrowband"
+  ]
+}

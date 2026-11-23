@@ -1,0 +1,14 @@
+import { chromium } from 'playwright';
+const base = process.argv[2] || 'http://127.0.0.1:8010';
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: 1400, height: 1100 } });
+const errors = [];
+page.on('pageerror', e => errors.push(e.message));
+page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
+await page.goto(base + '/?run=demo/separable_anchored', { waitUntil: 'networkidle' });
+await page.waitForSelector('#stateline .pill');
+const ambig = await page.locator('#ambig').innerText();
+console.log('ambig panel:\n' + ambig);
+await page.screenshot({ path: 'artifacts/ui_anchored_final.png', fullPage: true });
+console.log('ERRORS', JSON.stringify(errors));
+await browser.close();
