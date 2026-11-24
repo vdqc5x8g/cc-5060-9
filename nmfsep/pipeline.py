@@ -70,6 +70,11 @@ class Config:
     anchor_source: str | None = None  # restrict anchors to this key; None = all supplied
     anchor_keys: tuple[str, ...] | None = None
     heldout_fraction: float = 0.15
+    # Selectable linear-algebra backend for the matrix solves (SVD/lstsq/GEMM).
+    # "numpy" keeps the historical reference numerics; "scipy" runs the same
+    # contract through LAPACK/BLAS drivers.  Both write float64 C-order W/H.
+    linalg_backend: str = "numpy"
+    linalg_dtype: str = "float64"
 
 
 @dataclass
@@ -182,10 +187,14 @@ def run_pipeline(
             min_iter=cfg.min_iter,
             silence_rel=cfg.silence_rel,
             h_init=cfg.h_init,
+            linalg_backend=cfg.linalg_backend,
+            linalg_dtype=cfg.linalg_dtype,
         )
         candidates.append(res)
         candidate_meta.append({"kind": kind, "init": init, "seed": seed,
-                               "anchored": bool(res.anchor_indices)})
+                               "anchored": bool(res.anchor_indices),
+                               "linalg_backend": res.linalg_backend,
+                               "linalg_dtype": res.linalg_dtype})
 
     # Deterministic grid: NNDSVD plus seeded random starts.  The grid exists
     # because multiplicative NMF has many local optima; which one you land in
@@ -266,6 +275,7 @@ def run_pipeline(
     hold_loss = heldout_loss(
         train_V, best.W, hold_V, beta=cfg.beta, n_iter=200,
         anchors_count=len(best.anchor_indices),
+        linalg_backend=cfg.linalg_backend, linalg_dtype=cfg.linalg_dtype,
     ) if hold_idx.size != train_idx.size else float("nan")
     train_loss = best.final_loss
 
@@ -324,10 +334,13 @@ def run_pipeline(
             for k in range(best.W.shape[1])
         ],
         "template_peak_bins": [int(np.argmax(best.W[:, k])) for k in range(best.W.shape[1])],
+        "linalg_backend": best.linalg_backend,
+        "linalg_dtype": best.linalg_dtype,
     }
     diagnostics["gain_ambiguity_probes"] = gain_ambiguity_probe(
         magnitude, best.W, best.H, beta=cfg.beta, eps=best.eps,
         loss_rtol=cfg.retain_rtol,
+        linalg_backend=cfg.linalg_backend, linalg_dtype=cfg.linalg_dtype,
     )
     diagnostics["any_unidentifiable_gain_split"] = any(
         p["unidentifiable_gain_split"] for p in diagnostics["gain_ambiguity_probes"]
@@ -497,4 +510,6 @@ def config_summary(cfg: Config) -> dict[str, Any]:
         "silence_rel": cfg.silence_rel,
         "anchor_source": cfg.anchor_source,
         "heldout_fraction": cfg.heldout_fraction,
+        "linalg_backend": cfg.linalg_backend,
+        "linalg_dtype": cfg.linalg_dtype,
     }

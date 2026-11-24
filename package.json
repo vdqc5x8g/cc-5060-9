@@ -1,13 +1,14 @@
 {
   "name": "workspace",
-  "version": "1.0.0",
-  "description": "",
+  "version": "0.2.0",
+  "description": "nmfsep inspection UI checks (Playwright); Python deps are pinned in requirements-lock.txt",
   "main": "index.js",
   "directories": {
     "test": "tests"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "ui:check": "node scripts/ui_check.mjs"
   },
   "repository": {
     "type": "git",
@@ -20,6 +21,11 @@
     "url": "https://github.com/vdqc5x8g/cc-5060-9/issues"
   },
   "homepage": "https://github.com/vdqc5x8g/cc-5060-9#readme",
+  "linalgBackendMigration": {
+    "version": "0.2.0",
+    "backends": ["numpy", "scipy"],
+    "pythonLock": "requirements-lock.txt"
+  },
   "dependencies": {
     "playwright": "^1.65.1"
   }

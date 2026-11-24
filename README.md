@@ -2,7 +2,6 @@
 
 A from-scratch magnitude-spectrogram NMF prototype for **part extraction from a
 mono mix**, with two explicit strategies for non-uniqueness:
-
 1. **Retain candidates near the optimum.** Several deterministic initialisations
    are run; every solution within a loss threshold of the best is kept and
    compared template-by-template (Hungarian cosine match + activation-gain
@@ -22,13 +21,88 @@ separation model or black-box stem API is called.
 
 ---
 
+## Pluggable linear-algebra backend (migration v0.2.0)
+
+All matrix work inside the NMF solve — GEMM products, reductions, the NNDSVD
+SVD, the NNLS least-squares solve, and the unit-L1 column gauge — goes through a
+single backend contract (`nmfsep/linalg.py`), selectable per run:
+
+| backend | driver path | role |
+|---------|-------------|------|
+| `numpy` (default) | `numpy.linalg` / `@` / pairwise `sum` | reference implementation |
+| `scipy` | LAPACK `gesdd` SVD, `gelsd` lstsq, BLAS `gemm`, explicit naive-order reductions | alternative driver, not a rename |
+
+**Layout.** The scipy path calls BLAS directly, so it distinguishes C- and
+Fortran-ordered arrays: F-contiguous operands use a plain `gemm`; C-order
+operands use the row-major identity `(A·B)_row = (Bᵀ·Aᵀ)_col` via
+`gemm(trans_a, trans_b).T`. Every backend returns the canonical boundary type —
+float64, C-contiguous — regardless of the working layout, so the rest of the
+code never sees a foreign memory order.
+
+**Precision.** `--precision float32` runs the working solve in single precision
+(including `sgemm`) and promotes results back to canonical float64 at the
+boundary. `float16` and any other dtype are rejected at backend construction.
+
+**Normalisation.** Unit-L1 column normalisation is a backend method: free `W`
+columns are rescaled in place and the same scale is moved onto the `H` rows, so
+`W·H` is preserved bit-for-bit within tolerance (covered by test). Anchored
+columns are never rescaled.
+
+**Summation order is genuinely different.** The scipy reduction accumulates
+scalar terms in naive sequential order, which rounds differently from numpy's
+pairwise blocked sum on mixed-magnitude data (a test asserts the last bits
+actually differ, so the alternative path cannot be a library alias). C- and
+F-ordered inputs reduce identically.
+
+**Cross-backend equivalence is checked in reconstruction space, not by objective
+value.** `nmfsep/equivalence.py` first fixes the unit-L1 gauge, matches columns
+by unit-L2 template cosine with Hungarian assignment, and only then compares:
+aligned column cosines, activation-row correlations, the relative error of
+`W·H`, and the objective gap under a summation-order tolerance. Two solutions
+with the *same loss* but swapped columns are explicitly **not** equivalent —
+equal target values never identify a voice. A rank mismatch is reported as
+non-equivalent rather than raised. Fixed identical initialisation (`seed=42`)
+is used for every cross-backend comparison so the optimisation target, not the
+starting point, is what differs.
+
+**The new path emits audible components.** Both backends run the full
+STFT → NMF → Wiener-mask → ISTFT pipeline; per-stem energy and the partition
+of unity are asserted, so switching backends changes the driver, not the
+output contract.
+
+`scripts/verify_backend_migration.py` regenerates a low-rank and a sparse
+spectral target in-process (no hand-edited data), refuses a non-empty output
+directory, runs both backends from the same init, and writes per-target evidence
+JSON (objective gap, aligned cosines/correlations, reconstruction error,
+component energies, audibility, automation swap check) plus a summary. It exits
+nonzero if any equivalence or audibility check fails.
+
+### Identity-keyed mix automation and the write gate
+
+A backend switch can permute NMF columns while leaving `W·H` identical. Any
+fade stored by column index would then be written onto the wrong instrument.
+Automation curves (`nmfsep/automation.py`) are therefore bound to a component's
+**unit-L2 spectral signature**, not its index: every application re-claims the
+target by cosine match. If the mixer feedback cannot uniquely identify a voice
+(multiple templates above the match threshold), the call raises
+`AmbiguousClaimError`; no stem is written until an operator explicitly confirms.
+The server exposes the same rule as an HTTP **409 `confirmation_required`**
+response on grouped-stem writes, accepted only when the request is re-sent with
+`confirm_write: true`. The two separated voices get distinct default curves
+(exponential fade-out vs. swell).
+
+---
+
 ## Quick start
 
 ```bash
 # local Python deps (numpy, scipy, soundfile, matplotlib) live in .pylibs here
 export PYTHONPATH=/workspace/.pylibs:/workspace
 
+# every solve accepts --backend {numpy,scipy} and --precision {float64,float32}
 python3 -m nmfsep.cli demo  --templates 4 --iters 600 --seeds 5 --out runs/demo
+python3 -m nmfsep.cli demo  --backend scipy --precision float32 \
+    --templates 4 --iters 600 --seeds 5 --out runs/demo_scipy
 python3 -m nmfsep.cli unknown \
     --audio data/external/beethoven_op101_mvt1.ogg \
     --offset 0 --duration 20 --templates 6 --iters 400 --seeds 4 \
@@ -43,6 +117,15 @@ python3 -m nmfsep.cli sweep --min-templates 2 --max-templates 9 --iters 400 --se
 python3 -m nmfsep.cli sweep --audio data/external/beethoven_op101_mvt1.ogg \
     --offset 0 --duration 20 --min-templates 2 --max-templates 9 --iters 400 --seeds 4 \
     --out runs/unknown_sweep
+
+# backend-migration evidence in a clean directory (generates its own inputs)
+python3 scripts/verify_backend_migration.py --out /tmp/nmfsep_migration_check
+
+# CLI is auxiliary to NMF: a single solve, writing nmf_report.json with the
+# backend identity, per-component energy and audibility evidence
+python3 -m nmfsep.cli nmf --backend scipy --templates 3 --iters 200 \
+    --audio data/external/beethoven_op101_mvt1.ogg --duration 10 \
+    --out runs/cli_nmf
 
 # figures (reads saved runs; truth npz only for the synthetic mixtures)
 python3 - <<'PY'
@@ -60,7 +143,8 @@ PY
 # tests (stdlib unittest; pytest is not installed)
 python3 -m unittest discover -s tests -v
 
-# inspection UI
+# inspection UI — the graphical NMF entry point (Run NMF panel drives the new
+# backend-pluggable implementation; the CLI above is only auxiliary)
 python3 -m nmfsep.server --port 8010
 #   -> http://127.0.0.1:8010/?run=demo/separable
 ```
@@ -297,30 +381,47 @@ of *that exact grouping*.
 `python3 -m nmfsep.server --port 8010`, then open
 `http://127.0.0.1:8010/?run=demo/separable`.
 
+**The inspection window is the graphical NMF entry point.** The *Run NMF —
+spectral decomposition* panel submits a real backend-pluggable factorisation job
+(backend, precision, K, iterations, init and seed selectors) to a threaded job
+manager. Run state is visible while the job is queued/running/done; on
+completion the new run loads automatically with its separated stems ready to
+audition. Voice-activation and separation anomalies are flagged inline: silent
+components and indistinguishable template pairs (cosine ≥ 0.995) that require
+operator confirmation before any grouped write. The run-state pills show the
+active linalg backend and working dtype.
+
 * Run state: stability (per selected candidate kind), gain identifiability,
-  retained count, stop reason, iterations, silent frames, anchored names, mask
-  and sample sum errors, selected candidate.
+  retained count, stop reason, iterations, silent frames, anchored names,
+  linalg backend/dtype, mask and sample sum errors, selected candidate.
 * Template shapes (per-template dB-relative, **no source names**) and activation
   traces over time.
 * Solo/audition: per-template audio, solo checkbox, per-stem gain dB, server-side
   mixdown; **drag on the activation canvas to select a time segment** and render
   only that segment (10 ms raised-cosine gate, reported in the response).
+* Mix automation: one identity-keyed curve row per template with distinct
+  presets; applying re-claims the target by spectral signature, and an
+  unclaimable voice opens an operator-confirmation dialog instead of writing.
 * Grouping editor: user-defined groups, duplicate/missing-template hints, policy
   and mask power; returns grouped stems plus mask/sample errors and (synthetic
-  only) a ground-truth check of that grouping.
+  only) a ground-truth check of that grouping. A merge of indistinguishable
+  voices answers HTTP 409 first and writes only after explicit confirmation.
 * Candidate table (kind/init/seed/loss/gap/retained/shown/stop), template
   similarity and gain-ratio table, gain-ambiguity table, full ground-truth
   evaluation table with leakage matrix and oracle grouping, per-run figures.
 
 All UI numbers are read from saved diagnostics or computed from the saved
-`W, H, X`; nothing is fabricated in the page.
+`W, H, X`; nothing is fabricated in the page. `scripts/ui_check_backend.mjs`
+drives the whole flow (backend selector, scipy job completion, anomaly line,
+automation apply, 409 confirmation dialog) in a real browser and writes
+`artifacts/ui_backend_migration.png`.
 
 ---
 
 ## Tests
 
 ```bash
-python3 -m unittest discover -s tests -v    # 29 tests
+python3 -m unittest discover -s tests -v    # 53 tests
 ```
 
 Covers STFT round-trip/shape/length, NMF candidate recovery, monotonicity,
@@ -329,6 +430,25 @@ detection, candidate comparison, initialisation shapes; mask partition of unity,
 residual exactness, binary one-hot, grouping overlap rejection, zero-model
 finite output, time-gate segment; SDR/SI-SDR identities, leakage diagonal,
 permutation, spectral convergence.
+
+The v0.2.0 migration adds four suites:
+
+* `test_linalg_backends.py` — backend availability and invalid-precision
+  rejection; matmul across C/F/sliced layouts in float32 and float64 with
+  canonical float64 C-order outputs; SVD/lstsq against the numpy reference;
+  NNLS non-negativity; layout-independent reductions; a test that the scipy
+  summation order really differs in the last bits; gauge normalisation
+  preserving `W·H`; backend identity reporting.
+* `test_backend_equivalence.py` — fixed-init numpy/scipy equivalence in
+  reconstruction space; permutation alignment; the rule that equal loss with
+  swapped columns is not equivalence; rank mismatch reported, not raised;
+  audible stems from both backends.
+* `test_automation.py` — distinct curves per voice; the fade following the
+  voice across a column swap while a naive index would fail; ambiguity
+  blocking until confirmed; missing-target blocking; preset validity.
+* `test_jobs_api.py` — backend listing; a full scipy job writing an audible,
+  UI-consumable run with voice-activation diagnostics; invalid backend rejected
+  with HTTP 400; the grouped-write 409 gate and confirmed 200 rewrite.
 
 ---
 
@@ -341,16 +461,30 @@ permutation, spectral convergence.
 * No reference stems of any real recording were used to construct any estimated
   output.
 
+## Build locking and migration marker
+
+`requirements-lock.txt` pins the exact Python dependency set used with the
+migration (numpy 2.4.6, scipy 1.17.1, soundfile, matplotlib and transitive
+pins); install with `python3 -m pip install -r requirements-lock.txt`.
+`package.json` carries a `linalgBackendMigration` marker recording version
+0.2.0, the two backend names and the lockfile, and the package/module version
+is bumped to 0.2.0 (`nmfsep/__init__.py`). Every run written by the new path
+records `linalg_backend`, `linalg_dtype` and `nmfsep_version` in its
+diagnostics, so output artifacts identify the driver that produced them.
+
 ## Layout
 
 ```
-nmfsep/{stft,nmf,masks,metrics,synth,grouping,pipeline,audio,cli,figures,server}.py
+nmfsep/{stft,nmf,masks,metrics,synth,grouping,pipeline,audio,cli,figures,
+        server,linalg,equivalence,automation,jobs}.py
 ui/index.html
-tests/            (unittest)
+tests/            (unittest, 53 tests)
 runs/             generated runs (not required for the code to run)
 artifacts/figures generated figures; UI screenshots
 data/external/    downloaded public-domain audio
-scripts/          Playwright UI checks (need node_modules/ + Chromium libs)
+scripts/          verification + Playwright UI checks (need node_modules/ +
+                  Chromium libs; the browser check runs headless)
+requirements-lock.txt  pinned dependency set for the v0.2.0 migration
 ```
 
 `runs/`, `artifacts/`, `data/external/`, `.pylibs/`, `node_modules/` and the

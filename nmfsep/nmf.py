@@ -54,6 +54,8 @@ from typing import Any
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
+from .linalg import LinAlgBackend, NumpyBackend, get_backend
+
 
 @dataclass
 class NMFResult:
@@ -69,6 +71,8 @@ class NMFResult:
     silent_frames: list[int] = field(default_factory=list)
     eps: float = 0.0
     n_parameters: int = 0
+    linalg_backend: str = "numpy"
+    linalg_dtype: str = "float64"
 
     @property
     def reconstruction(self) -> np.ndarray:
@@ -83,57 +87,71 @@ def _safe_ratio(a: np.ndarray, b: np.ndarray, eps: float) -> np.ndarray:
     return a / np.maximum(b, eps)
 
 
-def _divergence(V: np.ndarray, Vhat: np.ndarray, beta: float, eps: float) -> float:
+def _divergence(
+    V: np.ndarray, Vhat: np.ndarray, beta: float, eps: float,
+    backend: LinAlgBackend | None = None,
+) -> float:
+    """Objective value.
+
+    The element-wise terms are identical across backends; the final reduction
+    goes through the selected backend's ``sum`` so a backend switch changes the
+    accumulation order (and thus the last floating-point bits) rather than the
+    mathematical objective.
+    """
+    be = backend or NumpyBackend()
     if beta == 2:
-        return float(0.5 * np.sum((V - Vhat) ** 2))
+        return 0.5 * be.sum((V - Vhat) ** 2)
     if beta == 1:
         ratio = _safe_ratio(V, Vhat, eps)
         with np.errstate(divide="ignore", invalid="ignore"):
             term = np.where(V > 0, V * np.log(np.maximum(ratio, 1e-300)), 0.0)
-        return float(np.sum(term - V + Vhat))
+        return be.sum(term - V + Vhat)
     if beta == 0:
         ratio = _safe_ratio(V, Vhat, eps)
-        return float(np.sum(ratio - np.log(np.maximum(ratio, 1e-300)) - 1.0))
+        return be.sum(ratio - np.log(np.maximum(ratio, 1e-300)) - 1.0)
     raise ValueError("beta must be 0, 1 or 2")
 
 
 def _update_h(
-    W: np.ndarray, H: np.ndarray, V: np.ndarray, beta: float, eps: float
+    W: np.ndarray, H: np.ndarray, V: np.ndarray, beta: float, eps: float,
+    backend: LinAlgBackend,
 ) -> np.ndarray:
-    Vhat = np.maximum(W @ H, eps)
+    Vhat = np.maximum(backend.matmul(W, H), eps)
     if beta == 2:
-        num = W.T @ V
-        den = W.T @ (W @ H)
+        num = backend.matmul(W.T, V)
+        den = backend.matmul(W.T, backend.matmul(W, H))
         return H * _safe_ratio(num, den, eps)
     if beta == 1:
-        num = W.T @ (V / Vhat)
-        den = W.sum(axis=0)[:, None]
+        num = backend.matmul(W.T, (V / Vhat))
+        den = backend.sum(W, axis=0)[:, None]
         return H * _safe_ratio(num, den, eps)
     # beta == 0 (Itakura-Saito)
-    num = W.T @ (V / (Vhat**2))
-    den = W.T @ (1.0 / Vhat)
+    num = backend.matmul(W.T, (V / (Vhat**2)))
+    den = backend.matmul(W.T, (1.0 / Vhat))
     return H * np.sqrt(_safe_ratio(num, den, eps))
 
 
 def _update_w(
-    W: np.ndarray, H: np.ndarray, V: np.ndarray, beta: float, eps: float
+    W: np.ndarray, H: np.ndarray, V: np.ndarray, beta: float, eps: float,
+    backend: LinAlgBackend,
 ) -> np.ndarray:
-    Vhat = np.maximum(W @ H, eps)
+    Vhat = np.maximum(backend.matmul(W, H), eps)
     if beta == 2:
-        num = V @ H.T
-        den = (W @ H) @ H.T
+        num = backend.matmul(V, H.T)
+        den = backend.matmul(backend.matmul(W, H), H.T)
         return W * _safe_ratio(num, den, eps)
     if beta == 1:
-        num = (V / Vhat) @ H.T
-        den = H.sum(axis=1)[None, :]
+        num = backend.matmul((V / Vhat), H.T)
+        den = backend.sum(H, axis=1)[None, :]
         return W * _safe_ratio(num, den, eps)
-    num = (V / (Vhat**2)) @ H.T
-    den = (1.0 / Vhat) @ H.T
+    num = backend.matmul((V / (Vhat**2)), H.T)
+    den = backend.matmul((1.0 / Vhat), H.T)
     return W * np.sqrt(_safe_ratio(num, den, eps))
 
 
 def initialize(
-    V: np.ndarray, rank: int, method: str = "nndsvda", seed: int = 0
+    V: np.ndarray, rank: int, method: str = "nndsvda", seed: int = 0,
+    backend: LinAlgBackend | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Deterministic initialisation.
 
@@ -144,7 +162,11 @@ def initialize(
     ``nndsvda``: NNDSVD with every zero replaced by the mean of the positive
     entries of V.  This keeps all components alive; it is the default.
     ``random``: seeded uniform values scaled to the data.
+
+    The SVD is taken through the selected linear-algebra backend, so both
+    backends share the NNDSVD construction but use their own drivers.
     """
+    be = backend or NumpyBackend()
     if method == "random":
         rng = np.random.default_rng(seed)
         scale = np.sqrt(max(V.mean(), 1e-12) / rank)
@@ -155,7 +177,7 @@ def initialize(
         raise ValueError(f"unknown init {method!r}")
     rng = np.random.default_rng(seed)
     scale = np.sqrt(max(V.mean(), 1e-12) / rank)
-    U, s, Vt = np.linalg.svd(V, full_matrices=False)
+    U, s, Vt = be.svd(V)
     k = min(rank, len(s))
     W = np.zeros((V.shape[0], rank))
     H = np.zeros((rank, V.shape[1]))
@@ -190,12 +212,17 @@ def initialize(
     return W, H
 
 
-def initialize_h(V: np.ndarray, W: np.ndarray, method: str, seed: int = 0) -> np.ndarray:
+def initialize_h(
+    V: np.ndarray, W: np.ndarray, method: str, seed: int = 0,
+    backend: LinAlgBackend | None = None,
+) -> np.ndarray:
     """Activation initialisation.
 
     ``nnls`` solves a clipped least-squares fit of V on the initial W.  This is
     deterministic and avoids the slow start that random H gives anchored runs.
+    The least-squares solve itself is dispatched through the selected backend.
     """
+    be = backend or NumpyBackend()
     rank = W.shape[1]
     if method == "random":
         rng = np.random.default_rng(seed)
@@ -203,19 +230,16 @@ def initialize_h(V: np.ndarray, W: np.ndarray, method: str, seed: int = 0) -> np
         return rng.uniform(0.0, 1.0, (rank, V.shape[1])) * scale
     if method != "nnls":
         raise ValueError(f"unknown H init {method!r}")
-    H, *_ = np.linalg.lstsq(W, V, rcond=None)
-    return np.maximum(H, 0.0)
+    return be.solve_nnls_clip(W, V)
 
 
 def _normalize_free_columns(
-    W: np.ndarray, H: np.ndarray, free: np.ndarray, eps: float
+    W: np.ndarray, H: np.ndarray, free: np.ndarray, eps: float,
+    backend: LinAlgBackend | None = None,
 ) -> None:
     """In place unit-L1 normalisation of free W columns, scale moved to H."""
-    for k in np.flatnonzero(free):
-        s = float(W[:, k].sum())
-        if s > eps:
-            W[:, k] /= s
-            H[k, :] *= s
+    be = backend or NumpyBackend()
+    be.normalize_columns(W, H, free, eps)
 
 
 def nmf(
@@ -233,6 +257,9 @@ def nmf(
     patience: int = 15,
     min_iter: int = 10,
     h_init: str = "nnls",
+    linalg_backend: str = "numpy",
+    linalg_dtype: str = "float64",
+    backend: LinAlgBackend | None = None,
 ) -> NMFResult:
     """Factorise ``V`` into ``W H`` with optional fixed anchor columns.
 
@@ -241,7 +268,13 @@ def nmf(
     iterations have run), or ``n_iter`` is reached, or the numerical objective
     fails to be finite / decreases.  The returned ``W, H`` are the best states
     observed.
+
+    ``linalg_backend`` selects the matrix-solve implementation (``numpy``
+    reference or ``scipy`` LAPACK/BLAS alternative); both share this same
+    algorithm, init grid and stopping contract.  ``backend`` accepts a
+    pre-built backend instance and takes precedence when supplied.
     """
+    be = backend or get_backend(linalg_backend, linalg_dtype)
     V = np.asarray(V, dtype=np.float64)
     if V.ndim != 2:
         raise ValueError("V must be 2-D")
@@ -278,16 +311,16 @@ def nmf(
         # allowed: H is estimated on fixed bases only.
         pass
 
-    W0, H0 = initialize(V, rank, method=init, seed=seed)
+    W0, H0 = initialize(V, rank, method=init, seed=seed, backend=be)
     W = W0.copy()
     H = H0.copy()
     if n_anchor:
         W[:, :n_anchor] = anchors
-    H = initialize_h(V, W, h_init, seed=seed)
+    H = initialize_h(V, W, h_init, seed=seed, backend=be)
     free = np.ones(rank, dtype=bool)
     free[:n_anchor] = False
     H[:, silent] = 0.0
-    _normalize_free_columns(W, H, free, eps)
+    _normalize_free_columns(W, H, free, eps, backend=be)
 
     loss_history: list[float] = []
     stop_reason = "max_iter"
@@ -296,17 +329,17 @@ def nmf(
     stale = 0
 
     for it in range(1, n_iter + 1):
-        H = _update_h(W, H, V, beta, eps)
+        H = _update_h(W, H, V, beta, eps, be)
         H[:, silent] = 0.0
         if free.any():
-            W_free = _update_w(W, H, V, beta, eps)
+            W_free = _update_w(W, H, V, beta, eps, be)
             W[:, free] = W_free[:, free]
-        _normalize_free_columns(W, H, free, eps)
+        _normalize_free_columns(W, H, free, eps, backend=be)
         H[:, silent] = 0.0
 
-        vhat = W @ H
+        vhat = be.matmul(W, H)
         if active.size:
-            loss = _divergence(V[:, active], vhat[:, active], beta, eps)
+            loss = _divergence(V[:, active], vhat[:, active], beta, eps, be)
         else:
             loss = 0.0
         if not np.isfinite(loss):
@@ -345,6 +378,8 @@ def nmf(
         silent_frames=silent.tolist(),
         eps=float(eps),
         n_parameters=n_params,
+        linalg_backend=be.name,
+        linalg_dtype=np.dtype(be.working_dtype).name,
     )
 
 
@@ -358,6 +393,9 @@ def heldout_loss(
     anchors_count: int = 0,
     eps: float | None = None,
     tol: float = 1e-6,
+    linalg_backend: str = "numpy",
+    linalg_dtype: str = "float64",
+    backend: LinAlgBackend | None = None,
 ) -> float:
     """Estimate held-out frames with W fixed, then report their divergence.
 
@@ -365,6 +403,7 @@ def heldout_loss(
     more templates may lower the training loss without improving held-out
     frames.
     """
+    be = backend or get_backend(linalg_backend, linalg_dtype)
     V_train = np.asarray(V_train, dtype=np.float64)
     V_hold = np.asarray(V_hold, dtype=np.float64)
     if eps is None:
@@ -376,9 +415,9 @@ def heldout_loss(
     H = rng.uniform(0.0, 1.0, (rank, V_hold.shape[1])) * scale
     prev = np.inf
     for _ in range(n_iter):
-        H = _update_h(W, H, V_hold, beta, eps)
-        vhat = W @ H
-        loss = _divergence(V_hold, vhat, beta, eps)
+        H = _update_h(W, H, V_hold, beta, eps, be)
+        vhat = be.matmul(W, H)
+        loss = _divergence(V_hold, vhat, beta, eps, be)
         if np.isfinite(prev) and abs(prev - loss) <= tol * max(abs(prev), eps):
             prev = loss
             break
@@ -395,6 +434,9 @@ def gain_ambiguity_probe(
     eps: float | None = None,
     cos_threshold: float = 0.995,
     loss_rtol: float = 0.01,
+    linalg_backend: str = "numpy",
+    linalg_dtype: str = "float64",
+    backend: LinAlgBackend | None = None,
 ) -> list[dict]:
     """Test whether two templates' gain split is observable.
 
@@ -408,24 +450,25 @@ def gain_ambiguity_probe(
     is unidentifiable.  This probe is computed from the fitted model and V
     alone; it does not use any reference stems.
     """
+    be = backend or get_backend(linalg_backend, linalg_dtype)
     if eps is None:
         pos = V[V > 0]
         eps = max(float(pos.mean()) * 1e-9 if pos.size else 1e-12, 1e-12)
     Wn = W / np.maximum(np.linalg.norm(W, axis=0, keepdims=True), 1e-12)
-    C = Wn.T @ Wn
-    base = _divergence(V, np.maximum(W @ H, eps), beta, eps)
+    C = be.matmul(Wn.T, Wn)
+    base = _divergence(V, np.maximum(be.matmul(W, H), eps), beta, eps, be)
     out: list[dict] = []
     for k in range(W.shape[1]):
         for j in range(k + 1, W.shape[1]):
             if C[k, j] < cos_threshold:
                 continue
-            combined = W[:, [k, j]] @ H[[k, j], :]
+            combined = be.matmul(W[:, [k, j]], H[[k, j], :])
             shape = Wn[:, k] + Wn[:, j]
             shape = shape / max(np.linalg.norm(shape), 1e-12)
-            g = np.maximum(shape @ combined, 0.0)  # shape has unit norm
+            g = np.maximum(be.matmul(shape[None, :], combined)[0], 0.0)
             merged = np.outer(shape, g)
-            probe = (W @ H) - combined + merged
-            loss = _divergence(V, np.maximum(probe, eps), beta, eps)
+            probe = be.matmul(W, H) - combined + merged
+            loss = _divergence(V, np.maximum(probe, eps), beta, eps, be)
             rel = (loss - base) / max(abs(base), eps)
             out.append(
                 {

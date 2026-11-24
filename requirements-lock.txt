@@ -1,0 +1,20 @@
+# Pinned runtime dependencies for nmfsep 0.2.0 (linear-algebra backend migration).
+# Both matrix-solve backends must resolve against these exact wheels so that
+# backend-equivalence evidence is reproducible.  Install into .pylibs with:
+#   python3 -m pip install --target .pylibs -r requirements-lock.txt
+#
+# Migration marker: versions pinned at the introduction of the selectable
+# linalg backend (numpy reference vs scipy LAPACK/BLAS alternative).
+numpy==2.4.6
+scipy==1.17.1        # alternative backend: gesdd SVD, gelsd lstsq, gemm BLAS
+soundfile==0.14.0    # WAV/OGG IO
+matplotlib==3.11.2   # offline figures
+pillow==13.0.0       # matplotlib image backend dependency
+cffi==2.1.1          # soundfile native bridge
+contourpy==1.3.3
+cycler==0.12.1
+fonttools==4.68.0
+kiwisolver==1.5.1
+packaging==26.3
+pyparsing==3.3.3
+python-dateutil==4.0.0

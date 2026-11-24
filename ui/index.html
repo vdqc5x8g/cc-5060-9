@@ -72,6 +72,44 @@
     <div id="stateline" class="muted">loading…</div>
   </div>
 
+  <div class="panel">
+    <h2>Run NMF — spectral decomposition (graphical entry)</h2>
+    <div class="row" style="gap:10px; flex-wrap:wrap">
+      <label>backend
+        <select id="nmfBackend"></select>
+      </label>
+      <label>precision
+        <select id="nmfPrecision">
+          <option value="float64">float64</option>
+          <option value="float32">float32</option>
+        </select>
+      </label>
+      <label>templates <input id="nmfK" type="number" value="3" min="1" max="12" style="width:64px"/></label>
+      <label>iterations <input id="nmfIter" type="number" value="300" min="20" step="20" style="width:78px"/></label>
+      <label>init
+        <select id="nmfInit">
+          <option value="nndsvda">nndsvda</option>
+          <option value="nndsvd">nndsvd</option>
+          <option value="random">random</option>
+        </select>
+      </label>
+      <label>seed <input id="nmfSeed" type="number" value="0" style="width:64px"/></label>
+      <button id="nmfRun">Run NMF on current mixture</button>
+    </div>
+    <div id="nmfStatus" class="muted" style="margin-top:10px">No job submitted yet. The CLI only wraps the same library; this window is the entry for running a decomposition.</div>
+    <div id="nmfAnomalies" class="list" style="margin-top:8px"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Mix automation — identity-keyed per voice</h2>
+    <div class="note">Automation is bound to each component's spectral signature, not its column
+      index. If the linear-algebra backend swaps columns, the fade follows the voice instead of
+      being written onto the wrong instrument. Voices the mixer cannot distinguish require explicit
+      confirmation before any stem is written.</div>
+    <div id="automationList" class="list"></div>
+    <div id="automationResult" class="muted" style="margin-top:8px"></div>
+  </div>
+
   <div class="grid cols2">
     <div class="panel">
       <h2>Templates — spectral basis (shapes)</h2>
@@ -146,7 +184,14 @@
 <script>
 const $ = (sel) => document.querySelector(sel);
 const COLORS = ['#6ea8fe','#f0b46c','#74d99f','#d38af5','#ef7b7b','#5ad1d1','#b6c36b','#f19ad1','#9aa4b2','#c9a227'];
-let state = { run: null, data: null, gains: {}, selected: new Set(), segment: null };
+let state = { run: null, data: null, gains: {}, selected: new Set(), segment: null, backends: [] };
+
+const AUTOMATION_PRESETS = [
+  ['fade_out_exponential', 'voice A · exponential fade-out'],
+  ['swell', 'voice B · swell and settle'],
+  ['fade_out_linear', 'linear fade-out'],
+  ['fade_out_cosine', 'raised-cosine fade-out'],
+];
 
 function fmt(x, d=2) { return (x === null || x === undefined || Number.isNaN(x)) ? '—' : Number(x).toFixed(d); }
 function el(tag, attrs={}, ...kids) {
@@ -198,20 +243,23 @@ function renderAll() {
   const stable = diag.selected_kind_stable ?? diag.solution_stable;
   const unident = diag.any_unidentifiable_gain_split;
   const retained = diag.selected_kind_retained ?? (diag.candidate_retained||[]).filter(Boolean).length;
-  const nCand = diag.selected_kind_n_candidates ?? diag.candidate_retained.length;
-  const selIdx = diag.selected_candidate_index;
-  const selKind = diag.selected_candidate_kind || (diag.candidate_meta||[])[selIdx]?.kind;
+  const nCand = diag.selected_kind_n_candidates ?? (diag.candidate_retained||[]).length;
+  const selIdx = diag.selected_candidate_index ?? 0;
+  const selKind = diag.selected_candidate_kind || (diag.candidate_meta||[])[selIdx]?.kind || 'NMF';
   const line = el('div', {class:'row'},
-    retained >= 2
+    nCand >= 2
       ? pill(stable ? `${selKind} solutions stable` : `${selKind} ambiguity`, stable ? 'ok' : 'warn')
-      : pill(`single ${selKind} candidate within loss threshold — no stability comparison`, 'warn'),
+      : pill(`single ${selKind} solve — no stability comparison`, 'warn'),
     pill(unident ? 'gain split unidentifiable' : 'gain split observable', unident ? 'bad' : 'ok'),
-    pill(`${retained}/${nCand} ${selKind} candidates retained within ${fmt(cfg.retain_rtol*100,1)}% loss`),
+    cfg.retain_rtol !== undefined
+      ? pill(`${retained}/${nCand} ${selKind} candidates retained within ${fmt(cfg.retain_rtol*100,1)}% loss`)
+      : pill(`single solve (job-initiated ${diag.linalg_backend || 'numpy'} path)`),
     pill(`shown: candidate ${selIdx}${selKind ? ' (' + selKind + ')' : ''}`),
     pill(`stop: ${diag.stop_reason}`),
     pill(`iters: ${diag.n_iter}`),
     pill(`silent frames: ${diag.silent_frame_count}`),
     pill(`anchored: ${diag.anchored ? diag.anchor_names.join(', ') : 'no'}`),
+    pill(`linalg backend: ${diag.linalg_backend || 'numpy'}${diag.linalg_dtype ? ' (' + diag.linalg_dtype + ')' : ''}`),
     pill(`mask Σ error: ${diag.mask_sum_error.toExponential(1)}`),
     pill(`stem Σ error: ${diag.component_sum_error.toExponential(1)}`),
   );
@@ -219,7 +267,7 @@ function renderAll() {
     `objective: ${cfg.objective} (β=${cfg.beta}) · best loss ${fmt(diag.best_loss,1)} · held-out loss ${fmt(diag.heldout_loss,1)} · ε=${diag.eps?.toExponential?.(2)} · params ${diag.n_parameters}`));
 
   drawTemplates(); drawActivations(); renderTracks(); renderCandidates(); renderAmbig();
-  renderGroups(); renderEval(); renderFigures(); updateSegmentInfo();
+  renderGroups(); renderEval(); renderFigures(); updateSegmentInfo(); renderAutomationPanel();
 }
 
 function drawTemplates() {
@@ -525,7 +573,20 @@ async function applyGroups() {
   const labels = Array.from(document.querySelectorAll('#groupEditor .tplrow input[type=text]')).map(i => i.value);
   const body = {groups, labels: labels.slice(0, groups.length), policy: $('#policy').value, power: Number($('#power').value)};
   try {
-    const res = await jpost(`api/run/${encodeURIComponent(state.run)}/group`, body);
+    let res;
+    try {
+      res = await jpost(`api/run/${encodeURIComponent(state.run)}/group`, body);
+    } catch (firstErr) {
+      // Write gate: indistinguishable voices cannot be uniquely claimed. The
+      // operator must confirm before grouped stems are written to disk.
+      if (!/confirmation_required/.test(firstErr.message)) throw firstErr;
+      const ok = confirm(
+        'This grouping merges components whose spectral shapes are indistinguishable, ' +
+        'so the mixer cannot assign a unique voice. Components are NMF templates, not ' +
+        'verified instrument names. Confirm writing the grouped stems anyway?');
+      if (!ok) { $('#groupResult').innerHTML = '<span class="warn">grouped-stem write cancelled; nothing was written.</span>'; return; }
+      res = await jpost(`api/run/${encodeURIComponent(state.run)}/group`, {...body, confirm_write: true});
+    }
     const box = $('#groupResult'); box.innerHTML = '';
     box.append(el('div', {},
       `policy ${res.policy} · mask Σ error ${res.mask_sum_error.toExponential(1)} · stem Σ error ${res.component_sum_error.toExponential(1)} · residual energy ${(res.residual_energy_ratio*100).toFixed(2)} %`));
@@ -615,6 +676,135 @@ $('#addGroup').addEventListener('click', () => {
 
 loadRuns().catch(e => { document.body.append(el('pre',{class:'bad'}, 'Failed to load: '+e.message)); });
 bindSegmentSelection();
+initNmfPanel();
+initAutomationPanel();
+
+async function initNmfPanel() {
+  try {
+    const {backends} = await jget('api/backends');
+    state.backends = backends;
+    const sel = $('#nmfBackend');
+    sel.innerHTML = '';
+    backends.forEach(b => sel.append(el('option', {value:b}, b + (b === 'numpy' ? ' (reference)' : ' (LAPACK/BLAS)'))));
+  } catch (e) {
+    $('#nmfStatus').textContent = 'backend list unavailable: ' + e.message;
+  }
+  $('#nmfRun').addEventListener('click', submitNmfJob);
+}
+
+function setNmfStatus(text, kind='') {
+  const box = $('#nmfStatus');
+  box.className = kind ? kind : 'muted';
+  box.textContent = text;
+}
+
+async function submitNmfJob() {
+  if (!state.run) { alert('open a run first; its mixture is the NMF input'); return; }
+  const runId = state.run + '/nmf_' + $('#nmfBackend').value + '_' + Date.now();
+  const body = {
+    run_id: runId, source_run: state.run,
+    backend: $('#nmfBackend').value, precision: $('#nmfPrecision').value,
+    n_templates: Number($('#nmfK').value), n_iter: Number($('#nmfIter').value),
+    init: $('#nmfInit').value, seed: Number($('#nmfSeed').value),
+  };
+  $('#nmfAnomalies').innerHTML = '';
+  try {
+    const job = await jpost('api/nmf', body);
+    setNmfStatus(`job ${job.job_id} queued on the ${job.backend} backend…`);
+    pollJob(job.job_id, runId);
+  } catch (e) { setNmfStatus('submission failed: ' + e.message, 'bad'); }
+}
+
+async function pollJob(jobId, runId) {
+  const started = Date.now();
+  const tick = async () => {
+    let st;
+    try { st = await jget(`api/jobs/${encodeURIComponent(jobId)}`); }
+    catch (e) { setNmfStatus('status poll failed: ' + e.message, 'bad'); return; }
+    const pct = Math.round((st.progress || 0) * 100);
+    setNmfStatus(`${st.status} — ${st.message} (${pct}%) · backend ${st.backend}`);
+    if (st.status === 'done') {
+      const r = st.result, d = r.diagnostics;
+      setNmfStatus(`done: loss ${d.best_loss.toFixed(2)} · ${d.n_iter} iters · stop ${d.stop_reason} · ` +
+        `mask Σ ${d.mask_sum_error.toExponential(1)} · audible components: ${r.audible}`, 'ok');
+      renderNmfAnomalies(d.voice_activation);
+      const {runs} = await jget('api/runs');
+      const sel = $('#runs');
+      if (![...sel.options].some(o => o.value === runId)) {
+        sel.append(el('option', {value:runId}, runId + ` · K=${d.template_peak_bins.length} · ${d.linalg_backend}`));
+      }
+      sel.value = runId;
+      await loadRun(runId);
+      return;
+    }
+    if (st.status === 'error') { setNmfStatus('error: ' + st.error, 'bad'); return; }
+    if (Date.now() - started > 120000) { setNmfStatus('timed out waiting for job', 'bad'); return; }
+    setTimeout(tick, 700);
+  };
+  tick();
+}
+
+function renderNmfAnomalies(va) {
+  const box = $('#nmfAnomalies'); box.innerHTML = '';
+  if (!va) return;
+  if (va.silent_components && va.silent_components.length) {
+    box.append(el('div', {class:'bad'}, 'voice-activation anomaly: silent component(s) T' +
+      va.silent_components.map(k => k).join(', T')));
+  }
+  if (va.n_ambiguous_pairs) {
+    for (const p of va.ambiguous_template_pairs) {
+      box.append(el('div', {class:'warn'},
+        `indistinguishable voices T${p.templates[0]}/T${p.templates[1]} (cosine ${p.cosine.toFixed(4)}): ` +
+        'operator confirmation required before writing grouped stems'));
+    }
+  }
+  if (!box.children.length) box.append(el('div', {class:'ok'}, 'no voice-activation or separation anomalies'));
+}
+
+function initAutomationPanel() {
+  // re-rendered whenever a run loads
+}
+
+function renderAutomationPanel() {
+  const box = $('#automationList'); box.innerHTML = '';
+  const d = state.data; if (!d) return;
+  const K = d.templates.n_templates;
+  for (let k = 0; k < K; k++) {
+    const row = el('div', {class:'tplrow'});
+    row.append(el('span', {}, `T${k}`));
+    const preset = el('select');
+    AUTOMATION_PRESETS.forEach(([v, label]) => preset.append(el('option', {value:v}, label)));
+    preset.value = AUTOMATION_PRESETS[k % 2][0];
+    row.append(preset);
+    const btn = el('button', {}, 'apply automation');
+    btn.addEventListener('click', () => submitAutomation(k, preset.value));
+    row.append(btn);
+    box.append(row);
+  }
+}
+
+async function submitAutomation(componentIndex, preset) {
+  const result = $('#automationResult'); result.className = 'muted';
+  const body = {action:'apply', component_index:componentIndex, preset,
+                automation_id:`auto_T${componentIndex}`};
+  try {
+    const res = await jpost(`api/run/${encodeURIComponent(state.run)}/automation`, body);
+    if (res.status === 'needs_confirmation') {
+      const names = res.candidates.map(c => `T${c.index} (cosine ${c.cosine.toFixed(4)})`).join(', ');
+      const ok = confirm(`Mixer feedback cannot uniquely identify this voice. Candidates: ${names}.\n` +
+        'Confirm writing the automation onto the first candidate?');
+      if (!ok) { result.textContent = 'write cancelled by operator'; return; }
+      const confirmed = await jpost(`api/run/${encodeURIComponent(state.run)}/automation`,
+        {...body, confirm:true, confirmed_index:res.candidates[0].index});
+      result.className = 'ok';
+      result.textContent = `automation applied after confirmation → target T${confirmed.target_index}`;
+      return;
+    }
+    result.className = 'ok';
+    result.textContent = `${preset} applied to identity-matched T${res.target_index} ` +
+      `(match cosine ${res.match_cosine.toFixed(4)})`;
+  } catch (e) { result.className = 'bad'; result.textContent = 'automation error: ' + e.message; }
+}
 </script>
 </body>
 </html>

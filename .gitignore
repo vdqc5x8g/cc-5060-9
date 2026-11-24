@@ -60,3 +60,8 @@ data/external/
 !/artifacts/
 /artifacts/*
 !/artifacts/figures/
+
+# Local NMF jobs started from the browser and generated automation output.
+/runs/**/nmf_numpy_[0-9]*/
+/runs/**/nmf_scipy_[0-9]*/
+/runs/**/activations_automated.npy

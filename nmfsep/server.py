@@ -28,7 +28,17 @@ from pathlib import Path
 
 import numpy as np
 
+from . import __version__
 from .audio import load_audio, save_audio
+from .automation import (
+    AmbiguousClaimError,
+    AutomationTargetError,
+    apply_automation,
+    make_automation,
+    write_gate,
+)
+from .jobs import JobManager
+from .linalg import available_backends
 from .masks import group_components
 from .stft import stft
 
@@ -36,6 +46,7 @@ ROOT = Path(__file__).resolve().parent.parent
 RUNS = ROOT / "runs"
 UI_DIR = ROOT / "ui"
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$")
+JOBS = JobManager(RUNS)
 
 
 def _figure_prefix(run_id: str) -> str:
@@ -203,6 +214,14 @@ def group_payload(run_id: str, body: dict) -> dict:
         labels = [f"group_{i}" for i in range(len(groups))]
     if len(labels) != len(groups):
         raise ValueError("labels must match groups in length")
+    # Write gate: grouped stems that merge indistinguishable components cannot
+    # be uniquely claimed from mixer feedback.  The operator must confirm the
+    # assignment explicitly before anything is written.
+    gate = group_confirmation_status(run_id, groups)
+    if gate["confirmation_required"] and not bool(body.get("confirm_write", False)):
+        raise PermissionError(
+            "confirmation_required: " + json.dumps(gate["indistinguishable_pairs"])
+        )
     safe = [_safe_label(l) for l in labels]
     ss = group_components(
         W, H, X, mixture, groups, sample_rate=sr, n_fft=n_fft, hop_length=hop,
@@ -348,8 +367,129 @@ def _write_json(path: Path, obj) -> None:
         json.dump(obj, f, indent=2)
 
 
+def _indistinguishable_pairs(W: np.ndarray, threshold: float = 0.995) -> list[dict]:
+    """Template pairs the mixer cannot tell apart from shape alone."""
+    Wn = W / np.maximum(np.linalg.norm(W, axis=0, keepdims=True), 1e-12)
+    C = Wn.T @ Wn
+    return [
+        {"templates": [k, j], "cosine": float(C[k, j])}
+        for k in range(W.shape[1]) for j in range(k + 1, W.shape[1])
+        if float(C[k, j]) >= threshold
+    ]
+
+
+def group_confirmation_status(run_id: str, groups: list[list[int]]) -> dict:
+    """Pre-write gate: can the requested grouped stems be uniquely claimed?
+
+    When any group joins components whose template shapes are
+    indistinguishable, mixer feedback cannot assign a unique voice, so an
+    explicit operator confirmation must be presented before any grouped stem
+    is written.
+    """
+    d = _run_dir(run_id)
+    W = np.load(d / "templates.npy")
+    pairs = _indistinguishable_pairs(W)
+    flagged = []
+    for pair in pairs:
+        hit_groups = [gi for gi, g in enumerate(groups)
+                      if pair["templates"][0] in g and pair["templates"][1] in g]
+        if hit_groups:
+            flagged.append({**pair, "groups": hit_groups})
+    return {
+        "confirmation_required": bool(flagged),
+        "indistinguishable_pairs": flagged,
+        "note": ("components are NMF templates, not verified instrument names; "
+                 "confirm the grouping to write stems" if flagged else ""),
+    }
+
+
+def _run_dir_safe(run_id: str) -> str:
+    """Validate a not-yet-existing run id (job output) stays under runs/."""
+    if not RUN_ID_RE.match(run_id):
+        raise ValueError("invalid run id")
+    d = (RUNS / run_id).resolve()
+    if RUNS.resolve() not in d.parents and d != RUNS.resolve():
+        raise ValueError("run outside runs directory")
+    return run_id
+
+
+def nmf_submit(body: dict) -> dict:
+    """Submit a factorisation job executed by the new NMF implementation."""
+    run_id = _run_dir_safe(str(body["run_id"]))
+    source = body.get("source_run")
+    audio_name = body.get("audio")
+    if source:
+        src = _run_dir(source)
+        diag = _read_json(src / "diagnostics.json", {})
+        mixture = _load_mixture(src, int(diag.get("sample_rate", 22050)))
+        mixture_name = diag.get("mixture_name", source)
+        sr = int(diag.get("sample_rate", body.get("sample_rate", 22050)))
+    elif audio_name:
+        sr = int(body.get("sample_rate", 22050))
+        mixture, sr = load_audio(str(ROOT / "data" / "external" / audio_name),
+                                 mono=True, target_sr=sr,
+                                 offset=float(body.get("offset", 0.0)),
+                                 duration=body.get("duration"))
+        mixture_name = audio_name
+    else:
+        raise ValueError("provide source_run or audio")
+    backend = str(body.get("backend", "numpy"))
+    precision = str(body.get("precision", "float64"))
+    if backend not in available_backends():
+        raise ValueError(f"backend {backend!r} unavailable; have {available_backends()}")
+    job = JOBS.submit(
+        mixture=mixture, sample_rate=sr, run_id=run_id,
+        backend=backend, precision=precision,
+        n_templates=int(body.get("n_templates", 3)),
+        n_iter=int(body.get("n_iter", 300)),
+        init=str(body.get("init", "nndsvda")),
+        seed=int(body.get("seed", 0)),
+        beta=float(body.get("beta", 1.0)),
+        mixture_name=mixture_name, nmfsep_version=__version__,
+    )
+    return job.as_dict()
+
+
+def automation_payload(run_id: str, body: dict) -> dict:
+    """Create or apply identity-keyed mix automation for one component."""
+    d = _run_dir(run_id)
+    W = np.load(d / "templates.npy")
+    H = np.load(d / "activations.npy")
+    action = body.get("action", "create")
+    component_index = int(body["component_index"])
+    preset = str(body.get("preset", "fade_out_exponential"))
+    if not (0 <= component_index < W.shape[1]):
+        raise ValueError("component_index out of range")
+    curve = make_automation(
+        str(body.get("automation_id", f"auto_{component_index}")),
+        W, component_index, H.shape[1], preset,
+        label=str(body.get("label", preset)),
+    )
+    if action == "create":
+        return {"automation": curve.as_dict(),
+                "write_gate": write_gate([curve], W)}
+    confirm = bool(body.get("confirm", False))
+    if confirm and body.get("confirmed_index") is not None:
+        curve.confirmed_index = int(body["confirmed_index"])
+    try:
+        applied = apply_automation(curve, W, H, confirm=confirm)
+    except AmbiguousClaimError as exc:
+        return {
+            "status": "needs_confirmation",
+            "automation_id": exc.automation_id,
+            "candidates": exc.candidates,
+            "write_gate": write_gate([curve], W),
+            "message": str(exc),
+        }
+    except AutomationTargetError as exc:
+        return {"status": "missing_target", "error": str(exc)}
+    np.save(d / "activations_automated.npy", applied["H"])
+    return {"status": "applied", **applied["claim"],
+            "automation": curve.as_dict()}
+
+
 class Handler(BaseHTTPRequestHandler):
-    server_version = "nmfsep-ui/0.1"
+    server_version = "nmfsep-ui/0.2"
 
     def log_message(self, fmt, *args):  # quieter
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
@@ -377,6 +517,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/runs":
                 self._json(200, {"runs": list_runs()})
                 return
+            if path == "/api/backends":
+                self._json(200, {"backends": available_backends()})
+                return
             m = re.match(r"^/figures/([^/]+)$", path)
             if m:
                 name = urllib.parse.unquote(m.group(1))
@@ -402,6 +545,14 @@ class Handler(BaseHTTPRequestHandler):
                         self._send(200, c.read_bytes(), "audio/wav")
                         return
                 self._json(404, {"error": "audio not found"})
+                return
+            m = re.match(r"^/api/jobs/([^/]+)$", path)
+            if m:
+                job = JOBS.get(urllib.parse.unquote(m.group(1)))
+                if job is None:
+                    self._json(404, {"error": "job not found"})
+                else:
+                    self._json(200, job.as_dict())
                 return
             m = re.match(r"^/api/run/(.+?)$", path)
             if m:
@@ -436,7 +587,27 @@ class Handler(BaseHTTPRequestHandler):
             if m:
                 self._json(200, solo_payload(urllib.parse.unquote(m.group(1)), body))
                 return
+            m = re.match(r"^/api/run/(.+?)/automation$", path)
+            if m:
+                self._json(200, automation_payload(urllib.parse.unquote(m.group(1)), body))
+                return
+            if path == "/api/nmf":
+                self._json(200, nmf_submit(body))
+                return
+            m = re.match(r"^/api/jobs/([^/]+)$", path)
+            if m:
+                job = JOBS.get(urllib.parse.unquote(m.group(1)))
+                if job is None:
+                    self._json(404, {"error": "job not found"})
+                else:
+                    self._json(200, job.as_dict())
+                return
+            if path == "/api/backends":
+                self._json(200, {"backends": available_backends()})
+                return
             self._json(404, {"error": "not found"})
+        except PermissionError as exc:
+            self._json(409, {"error": str(exc), "confirmation_required": True})
         except ValueError as exc:
             self._json(400, {"error": str(exc)})
         except Exception as exc:  # noqa: BLE001

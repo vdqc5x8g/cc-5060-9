@@ -30,6 +30,7 @@ import numpy as np
 
 from . import __version__, grouping
 from .audio import load_audio, save_audio
+from .linalg import available_backends
 from .metrics import sdr
 from .nmf import nmf
 from .pipeline import (
@@ -135,7 +136,8 @@ def cmd_demo(args) -> int:
     outroot = args.out or "runs/demo"
     os.makedirs(outroot, exist_ok=True)
     summary = {}
-    cfg = Config(n_templates=args.templates, n_iter=args.iters, seeds=tuple(range(args.seeds)))
+    cfg = Config(n_templates=args.templates, n_iter=args.iters, seeds=tuple(range(args.seeds)),
+                 linalg_backend=args.backend, linalg_dtype=args.precision)
     for name, maker, K in (
         ("separable", make_separable, 3),
         ("ambiguous", make_ambiguous, 2),
@@ -245,7 +247,8 @@ def cmd_unknown(args) -> int:
     if args.max_seconds and len(x) > args.max_seconds * sr:
         x = x[: int(args.max_seconds * sr)]
     cfg = Config(n_templates=args.templates, n_iter=args.iters,
-                 seeds=tuple(range(args.seeds)))
+                 seeds=tuple(range(args.seeds)),
+                 linalg_backend=args.backend, linalg_dtype=args.precision)
     res = run_pipeline(x, sr, cfg)
     diag = _save_run(outdir, res, mixture_name=os.path.basename(args.audio),
                      ground_truth_used_for_metrics=False)
@@ -267,7 +270,8 @@ def cmd_synth(args) -> int:
     stems = data["stems"]
     labels = [str(s) for s in data["labels"]]
     cfg = Config(n_templates=args.templates, n_iter=args.iters,
-                 seeds=tuple(range(args.seeds)))
+                 seeds=tuple(range(args.seeds)),
+                 linalg_backend=args.backend, linalg_dtype=args.precision)
     res = run_pipeline(
         mix, sr, cfg,
         reference_stems=[stems[i] for i in range(len(stems))],
@@ -299,7 +303,8 @@ def cmd_sweep(args) -> int:
         labels = [t.name for t in tracks]
     rows = []
     for K in range(args.min_templates, args.max_templates + 1):
-        cfg = Config(n_templates=K, n_iter=args.iters, seeds=tuple(range(args.seeds)))
+        cfg = Config(n_templates=K, n_iter=args.iters, seeds=tuple(range(args.seeds)),
+                     linalg_backend=args.backend, linalg_dtype=args.precision)
         t0 = time.time()
         res = run_pipeline(mix, sr, cfg, reference_stems=refs, reference_labels=labels)
         d = res.diagnostics
@@ -355,6 +360,62 @@ def _csv_cell(v) -> str:
     return str(v)
 
 
+def cmd_nmf(args) -> int:
+    """Auxiliary single NMF solve (the graphical window is the main entry).
+
+    Runs one factorisation on an audio file or a synthetic mixture with the
+    chosen linear-algebra backend, writes W/H and per-component stems, and
+    records the backend identity plus the objective/component diagnostics so a
+    backend migration can be audited from the command line.
+    """
+    from .masks import reconstruct_stems
+
+    outdir = args.out or "runs/nmf"
+    if args.audio:
+        x, sr = load_audio(args.audio, mono=True, offset=args.offset or 0.0,
+                           duration=args.duration, target_sr=args.sample_rate)
+        mixture_name = os.path.basename(args.audio)
+    else:
+        mix, tracks = make_separable(8.0)
+        x, sr = mix, 22050
+        mixture_name = "synthetic_separable"
+    X = stft(x, n_fft=1024, hop_length=256)
+    V = np.abs(X)
+    t0 = time.time()
+    res = nmf(
+        V, args.templates, beta=1.0, n_iter=args.iters, init="nndsvda",
+        seed=0, linalg_backend=args.backend, linalg_dtype=args.precision,
+    )
+    ss = reconstruct_stems(
+        res.W, res.H, X, x, sample_rate=sr, n_fft=1024, hop_length=256,
+        labels=[f"component_{k:02d}" for k in range(res.W.shape[1])],
+    )
+    os.makedirs(outdir, exist_ok=True)
+    np.save(os.path.join(outdir, "templates.npy"), res.W)
+    np.save(os.path.join(outdir, "activations.npy"), res.H)
+    np.save(os.path.join(outdir, "mixture.npy"), x)
+    for i, stem in enumerate(ss.stems):
+        save_audio(os.path.join(outdir, "stems", f"{ss.labels[i]}.wav"), stem, sr)
+    report = {
+        "mixture_name": mixture_name,
+        "nmfsep_version": __version__,
+        "linalg_backend": res.linalg_backend,
+        "linalg_dtype": res.linalg_dtype,
+        "available_backends": available_backends(),
+        "n_iter": res.n_iter,
+        "stop_reason": res.stop_reason,
+        "final_loss": res.final_loss,
+        "component_energy_db": [float(10 * np.log10(max(float(np.sum(s**2)), 1e-12)))
+                                for s in ss.stems],
+        "component_sum_error": ss.component_sum_error,
+        "elapsed_s": round(time.time() - t0, 3),
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    }
+    write_json(os.path.join(outdir, "nmf_report.json"), report)
+    print(json.dumps(report, indent=2))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="nmfsep", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -368,6 +429,10 @@ def main(argv: list[str] | None = None) -> int:
         sp.add_argument("--seeds", type=int, default=5)
         sp.add_argument("--out", default=None)
         sp.add_argument("--sample-rate", type=int, default=22050)
+        sp.add_argument("--backend", choices=available_backends(), default="numpy",
+                        help="linear-algebra backend for the NMF matrix solves")
+        sp.add_argument("--precision", choices=("float64", "float32"), default="float64",
+                        help="working precision of the backend drivers")
         if name in ("unknown", "sweep"):
             sp.add_argument("--audio", default=None)
             sp.add_argument("--offset", type=float, default=0.0)
@@ -381,6 +446,20 @@ def main(argv: list[str] | None = None) -> int:
             sp.add_argument("--min-templates", type=int, default=2)
             sp.add_argument("--max-templates", type=int, default=8)
 
+    nmf_parser = sub.add_parser(
+        "nmf",
+        help="auxiliary single NMF solve (the inspection window is the main entry)",
+    )
+    nmf_parser.add_argument("--audio", default=None)
+    nmf_parser.add_argument("--offset", type=float, default=0.0)
+    nmf_parser.add_argument("--duration", type=float, default=None)
+    nmf_parser.add_argument("--templates", type=int, default=3)
+    nmf_parser.add_argument("--iters", type=int, default=400)
+    nmf_parser.add_argument("--out", default=None)
+    nmf_parser.add_argument("--sample-rate", type=int, default=22050)
+    nmf_parser.add_argument("--backend", choices=available_backends(), default="numpy")
+    nmf_parser.add_argument("--precision", choices=("float64", "float32"), default="float64")
+
     args = p.parse_args(argv)
     if args.cmd == "demo":
         return cmd_demo(args)
@@ -392,6 +471,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_synth(args)
     if args.cmd == "sweep":
         return cmd_sweep(args)
+    if args.cmd == "nmf":
+        return cmd_nmf(args)
     return 2
 
 
